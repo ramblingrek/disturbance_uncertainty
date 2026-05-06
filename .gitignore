@@ -1,0 +1,26 @@
+# Large input data — not for version control
+downloaded_images/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Claude Code — local settings and AI memory
+.claude/
+memory/
+CLAUDE.md
+
+# Experiment output — ignore individual run CSVs, keep master logger
+experiment_logs/run_ID_*.csv
+
+# Virtual environments (if one is added later)
+.venv/
+venv/
+env/
