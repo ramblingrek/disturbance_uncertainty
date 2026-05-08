@@ -310,6 +310,7 @@ class LandscapeStackCollection:
         sampling_seed: Optional[int] = int(time.time()),
         interpreter_agent: Optional[InterpreterAgent] = None,
         samples: Optional[pd.DataFrame] = None,
+        save_dir: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fit a richards function mapping sensor values -> interpreter probability of loss
@@ -487,8 +488,11 @@ class LandscapeStackCollection:
             ax[1].set_ylabel("Residual (interp − model)")
             ax[1].set_title("Residual vs sensor")
             ax[1].grid(alpha=0.3)
-            
+
             plt.tight_layout()
+            if save_dir is not None:
+                fname = f"model_fit_{s_name.replace(' ', '_')}.png"
+                fig.savefig(os.path.join(save_dir, fname), dpi=150, bbox_inches="tight")
             plt.show()
 
 
@@ -1488,8 +1492,10 @@ class LandscapeStackCollection:
         show_true_area: bool = True,
         show_diagnostics: bool = True,
         signal_attr: str = "sensor_fields_by_name",
-        x_prop_range: Optional[tuple[float, float]] = None,   # NEW: histogram x-range in proportion units
-    ) -> None:
+        x_prop_range: Optional[tuple[float, float]] = None,
+        save_dir: Optional[str] = None,
+        filename_prefix: Optional[str] = None,
+    ) -> tuple:
         """
         Figure 1 (1x2):
           (A) Area above cutoff t: A(t) = (# pixels with prob > t) * pixel_area
@@ -1556,7 +1562,7 @@ class LandscapeStackCollection:
                 true_prop = None
     
         # ---------- FIGURE 1: area curve + histogram (PROPORTIONS) ----------
-        fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+        fig1, ax = plt.subplots(1, 2, figsize=(12, 5))
     
         # (A) Area vs threshold (absolute)
         ax0 = ax[0]
@@ -1604,17 +1610,22 @@ class LandscapeStackCollection:
         ax1.text(0.50, 0.78, f"P90: {p90:.3f}", transform=ax1.transAxes, va="top")
     
         plt.tight_layout()
+        if save_dir is not None:
+            _prefix = filename_prefix or f"stack_{stack_index:03d}_{stack.stack_id}"
+            fig1.savefig(
+                os.path.join(save_dir, f"{_prefix}_area_dist.png"), dpi=150, bbox_inches="tight"
+            )
         plt.show()
-    
+
         print(f"10th, 50th, and 90th percentile DISTURBED PROPORTIONS: {p10:.6f}, {p50:.6f}, {p90:.6f}")
         if true_prop is not None:
             print(f"True disturbed proportion: {true_prop:.6f}")
         else:
             print("True disturbed proportion: (unavailable)")
-    
+
         # ---------- FIGURE 2: diagnostics (maps + histograms) ----------
         if not show_diagnostics:
-            return
+            return (fig1, None)
     
         # (1) Sensor degraded signal image
         if not hasattr(stack, "sensor_fields") or not isinstance(stack.sensor_fields, dict):
@@ -1709,8 +1720,13 @@ class LandscapeStackCollection:
         axm[1, 2].set_ylabel("Density")
     
         plt.tight_layout()
+        if save_dir is not None:
+            _prefix = filename_prefix or f"stack_{stack_index:03d}_{stack.stack_id}"
+            fig2.savefig(
+                os.path.join(save_dir, f"{_prefix}_diagnostics.png"), dpi=150, bbox_inches="tight"
+            )
         plt.show()
-    
+
         # -- Proportion-of-area reporting (analogous to Olofsson-style summaries) --
         p1_dist = area_props
         p0_dist = 1.0 - p1_dist
@@ -1740,9 +1756,11 @@ class LandscapeStackCollection:
         else:
             print("\nTruth disturbed proportion not available (could not read base_landscape.disturbed).")
             print("=============================================================================\n")
-            
-    
-    
+
+        return (fig1, fig2)
+
+
+
 
 
 
@@ -1751,6 +1769,45 @@ class LandscapeStackCollection:
 
         
             
+    def save_all_stack_plots(
+        self,
+        save_dir: str,
+        sensor_name: str,
+        prob_source_attr: str = "interpreter_calibrated_prob_by_sensor",
+        pixel_area: float = 1.0,
+        step: float = 0.001,
+        bins: int = 100,
+        x_prop_range: Optional[tuple] = None,
+        show_diagnostics: bool = True,
+    ) -> None:
+        """
+        Generate and save area-distribution figures for every stack in the collection.
+
+        Files are written to save_dir as:
+            stack_000_{stack_id}_area_dist.png
+            stack_000_{stack_id}_diagnostics.png
+            ...
+
+        Figures are closed after saving to keep memory use low.
+        """
+        import matplotlib
+        for si, stack in enumerate(self.stacks):
+            prefix = f"stack_{si:03d}_{stack.stack_id}"
+            self.plot_area_distribution_for_stack(
+                stack_index=si,
+                sensor_name=sensor_name,
+                prob_source_attr=prob_source_attr,
+                pixel_area=pixel_area,
+                step=step,
+                bins=bins,
+                show_true_area=True,
+                show_diagnostics=show_diagnostics,
+                x_prop_range=x_prop_range,
+                save_dir=save_dir,
+                filename_prefix=prefix,
+            )
+            plt.close("all")
+
     ###------------------------------------------------------------------------------
     #
     #               Binary classifiers
@@ -1947,13 +2004,14 @@ class LandscapeStackCollection:
         self,
         sensor_name: str,
         show_cost: bool = True,
-    ) -> None:
+        save_dir: Optional[str] = None,
+    ) -> "plt.Figure":
         """
         Plot FPR and FNR (and optionally cost) as a function of threshold
         for a previously built binary classifier.
-        """
-        import matplotlib.pyplot as plt
 
+        Returns the matplotlib Figure.
+        """
         if sensor_name not in self.binary_models:
             raise KeyError(f"No binary model found for sensor {sensor_name!r}. Call buildBinaryClassifier() first.")
 
@@ -1965,7 +2023,7 @@ class LandscapeStackCollection:
         fnr = np.array(curve["fnr"])
         cost = np.array(curve["cost"])
 
-        plt.figure(figsize=(7, 5))
+        fig = plt.figure(figsize=(7, 5))
         plt.plot(thresholds, fpr, label="FPR", linewidth=2)
         plt.plot(thresholds, fnr, label="FNR", linewidth=2)
 
@@ -1981,7 +2039,11 @@ class LandscapeStackCollection:
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
+        if save_dir is not None:
+            fname = f"binary_threshold_curves_{sensor_name.replace(' ', '_')}.png"
+            fig.savefig(os.path.join(save_dir, fname), dpi=150, bbox_inches="tight")
         plt.show()
+        return fig
 
     def loadBinaryModel(self, model_data: Dict[str, Any]) -> None:
         """
@@ -2916,6 +2978,7 @@ class LandscapeStackCollection:
         # plotting
         xlim_prop: tuple[float, float] | None = None,
         title_prefix: str = "Validation",
+        save_dir: Optional[str] = None,
     ) -> dict:
         """
         Evaluate per-stack performance for BOTH:
@@ -3141,6 +3204,18 @@ class LandscapeStackCollection:
         axb.legend(frameon=True)
         plt.tight_layout()
     
+        if save_dir is not None:
+            fig_cont.savefig(
+                os.path.join(save_dir, "continuous_summary.png"), dpi=150, bbox_inches="tight"
+            )
+            fig_bin.savefig(
+                os.path.join(save_dir, "binary_summary.png"), dpi=150, bbox_inches="tight"
+            )
+            continuous_df.to_csv(os.path.join(save_dir, "continuous_metrics.csv"), index=False)
+            binary_df.drop(columns=["samples"], errors="ignore").to_csv(
+                os.path.join(save_dir, "binary_metrics.csv"), index=False
+            )
+
         return {
             "continuous_df": continuous_df,
             "binary_df": binary_df,

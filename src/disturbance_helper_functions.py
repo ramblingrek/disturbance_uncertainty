@@ -85,16 +85,38 @@ def generate_run_id(prefix: str = "run_ID") -> str:
     return f"{prefix}_{timestamp}_{short_hash}"
 
 
+def create_output_dir(
+    run_id: str,
+    experiment_name: str = "",
+    base_dir: str = "experiment_outputs/",
+) -> dict:
+    """
+    Create a structured output directory for a run and return paths.
+
+    Returns a dict with keys:
+        'root'      – top-level run folder
+        'figures'   – for summary-level figures
+        'per_stack' – for per-stack figures
+    """
+    folder_name = f"{experiment_name}_{run_id}" if experiment_name else run_id
+    root = os.path.join(base_dir, folder_name)
+    figures_dir = os.path.join(root, "figures")
+    per_stack_dir = os.path.join(figures_dir, "per_stack")
+    os.makedirs(per_stack_dir, exist_ok=True)
+    return {"root": root, "figures": figures_dir, "per_stack": per_stack_dir}
+
+
 def _append_to_master_log(
     csv_dir: str,
     created_pacific_time: str,
     run_id: str,
     notes: Optional[str],
+    output_dir: Optional[str] = None,
     master_filename: str = "master_experiment_logger.csv",
 ) -> str:
     """
     Ensure master log exists, and append one row:
-      created_utc, run_id, notes
+      created_pacific_time, run_id, notes, output_dir
     """
     master_path = os.path.join(csv_dir, master_filename)
     exists = os.path.exists(master_path)
@@ -102,8 +124,13 @@ def _append_to_master_log(
     with open(master_path, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not exists:
-            writer.writerow(["created_pacific_time", "run_id", "notes"])
-        writer.writerow([created_pacific_time, run_id, "" if notes is None else notes])
+            writer.writerow(["created_pacific_time", "run_id", "notes", "output_dir"])
+        writer.writerow([
+            created_pacific_time,
+            run_id,
+            "" if notes is None else notes,
+            "" if output_dir is None else output_dir,
+        ])
 
     return master_path
 
@@ -113,6 +140,7 @@ def export_with_metadata(
     csv_path: str = "experiment_logs/",
     run_id: Optional[str] = None,
     notes: Optional[str] = None,
+    output_dir: Optional[str] = None,
 ) -> str:
     """
     Export a nested experiment config dictionary to:
@@ -123,9 +151,10 @@ def export_with_metadata(
       - config
 
     Optional:
-      - csv_path (directory; default "experiment_logs/")
-      - run_id (auto-generated if None)
-      - notes (stored in both files)
+      - csv_path     directory for logs (default "experiment_logs/")
+      - run_id       auto-generated if None
+      - notes        stored in both files
+      - output_dir   path to the run's output folder (recorded in master log)
     """
     os.makedirs(csv_path, exist_ok=True)
 
@@ -140,6 +169,7 @@ def export_with_metadata(
             "run_id": run_id,
             "created_pacific_time": created_pacific_time,
             "notes": notes,
+            "output_dir": output_dir,
         },
         **config,
     }
@@ -160,6 +190,7 @@ def export_with_metadata(
         created_pacific_time=created_pacific_time,
         run_id=run_id,
         notes=notes,
+        output_dir=output_dir,
     )
 
     return run_csv_file
