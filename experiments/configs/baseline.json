@@ -1,0 +1,247 @@
+{
+  "experiment_name": "baseline",
+  "notes": "Baseline run — clean sensor, minimal interpreter noise",
+
+  "landscape_stack_config": {
+    "id_prefix": "DL",
+    "id_strategy": "hash",
+    "explicit_id": null,
+    "tif_path": "downloaded_images/snic_10_2019_-12.004_132.979.tif",
+
+    "disturbance_config": {
+      "random": {
+        "seed": null
+      },
+      "raster": {
+        "band": 1
+      },
+      "types": {
+        "type1": {
+          "name": "Conifer",
+          "proportion_of_patches": 0.6,
+          "initial_cover": {
+            "target_mean": 0.90,
+            "kappa": 20.0
+          },
+          "proportional_loss": {
+            "mixture": {
+              "catastrophic_probability": 0.02,
+              "background_alpha": 0.3,
+              "background_beta": 8.0,
+              "catastrophic_alpha": 8.0,
+              "catastrophic_beta": 0.7
+            }
+          }
+        },
+        "type2": {
+          "name": "Broadleaf",
+          "proportion_of_patches": 0.4,
+          "initial_cover": {
+            "target_mean": 0.85,
+            "kappa": 18.0
+          },
+          "proportional_loss": {
+            "mixture": {
+              "catastrophic_probability": 0.05,
+              "background_alpha": 0.4,
+              "background_beta": 7.0,
+              "catastrophic_alpha": 7.0,
+              "catastrophic_beta": 0.8
+            }
+          }
+        }
+      },
+      "thresholds": {
+        "final_cover_percent": 15.0
+      },
+      "simulation": {
+        "max_retries": 10
+      }
+    },
+
+    "sensors": [
+      {
+        "name": "Optical Sensor 1",
+        "config": {
+          "signal_transform": {
+            "max_signal": 1000.0,
+            "curve_k": 3.0
+          },
+          "gaussian_patch_noise": {
+            "std_proportion_of_range": 0.0
+          },
+          "types": {
+            "type1": {
+              "gaussian_patch_noise": {
+                "std_proportion_of_range": 0.0
+              }
+            },
+            "type2": {
+              "gaussian_patch_noise": {
+                "std_proportion_of_range": 0.0
+              }
+            }
+          },
+          "lowpass_filter": {
+            "kernel_size": 0
+          },
+          "spatial_noise": {
+            "spatial_autocorr_distance": 10.0,
+            "amplitude_proportion_of_range": 0.0
+          }
+        }
+      },
+      {
+        "name": "Optical Sensor 2",
+        "config": {
+          "signal_transform": {
+            "max_signal": 1500.0,
+            "curve_k": 2.5
+          },
+          "gaussian_patch_noise": {
+            "std_proportion_of_range": 0.015
+          },
+          "lowpass_filter": {
+            "kernel_size": 5
+          },
+          "spatial_noise": {
+            "spatial_autocorr_distance": 15.0,
+            "amplitude_proportion_of_range": 0.12
+          }
+        }
+      }
+    ],
+
+    "interpreter": {
+      "name": "DefaultInterpreter",
+      "config": {
+        "detection_curve": {
+          "pivot_loss": 15.0,
+          "slope": 0.3
+        },
+        "definition_curve": {
+          "slope": 0.4,
+          "threshold_override": null
+        },
+        "gaussian_patch_noise": {
+          "std_dev_percent": 0.0
+        },
+        "beta_patch_uncertainty": {
+          "alpha": 0.1,
+          "beta": 12.0
+        },
+        "lowpass_filter": {
+          "kernel_size": 3
+        },
+        "spatial_uncertainty": {
+          "spatial_autocorr_distance": 20.0,
+          "max_scaler": 0.01
+        },
+        "types": {
+          "type1": {
+            "detection_curve": {
+              "pivot_loss": 15.0,
+              "slope": 0.3
+            },
+            "gaussian_patch_noise": {
+              "std_dev_percent": 0.0
+            },
+            "beta_patch_uncertainty": {
+              "alpha": 0.1,
+              "beta": 12.0
+            }
+          },
+          "type2": {
+            "detection_curve": {
+              "pivot_loss": 15.0,
+              "slope": 0.3
+            },
+            "gaussian_patch_noise": {
+              "std_dev_percent": 0.0
+            },
+            "beta_patch_uncertainty": {
+              "alpha": 0.1,
+              "beta": 12.0
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "training_experiment_config": {
+    "n_stacks": 10,
+    "patch_dir": "downloaded_images/",
+    "patch_selection_seed": null,
+    "disturbance_seed_base": null,
+    "use_separate_seeds_per_stack": true,
+    "sensor_name_for_strat": "Optical Sensor 1",
+    "n_strata": 5,
+    "samples_per_stratum": 50
+  },
+
+  "training_model_config": {
+    "sensor_name": "Optical Sensor 1",
+    "n_strata": 5,
+    "samples_per_stratum": 50,
+    "sampling_seed": null
+  },
+
+  "training_interp_prob_model_config": {
+    "sensor_name": "Optical Sensor 1",
+    "n_strata": 5,
+    "samples_per_stratum": 100,
+    "sampling_seed": 11
+  },
+
+  "training_interp_config": {
+    "interpreter_id": "interpreterBuildingModel",
+    "consistency_std_pct": 0.0,
+    "bias_std_pct": 0.0,
+    "confidence_std": 0.0,
+    "seed": null
+  },
+
+  "binary_classifier_config": {
+    "sensor_name": "Optical Sensor 1",
+    "n_strata": 5,
+    "samples_per_stratum": 50,
+    "sampling_seed": null,
+    "fp_to_fn_ratio": 1.0
+  },
+
+  "validation_experiment_config": {
+    "n_stacks": 10,
+    "patch_dir": "downloaded_images/",
+    "patch_selection_seed": null,
+    "sensor_name_for_strat": "Optical Sensor 1",
+    "n_strata": 5,
+    "samples_per_stratum": 20
+  },
+
+  "validation_interp_config": {
+    "interpreter_id": "validation_interp1",
+    "consistency_std_pct": 0.0,
+    "bias_std_pct": 0.0,
+    "confidence_std": 0.0,
+    "seed": null
+  },
+
+  "evaluate_config": {
+    "sensor_name": "Optical Sensor 1",
+    "prob_attr": "interpreter_calibrated_prob_by_sensor",
+    "step": 0.001,
+    "n_samples_map0": 100,
+    "n_samples_map1": 100,
+    "xlim_prop": [0.0, 0.05],
+    "title_prefix": "Baseline"
+  },
+
+  "stack_plots_config": {
+    "pixel_area": 900.0,
+    "step": 0.001,
+    "bins": 500,
+    "x_prop_range": [0.0, 0.05],
+    "show_diagnostics": true
+  }
+}
