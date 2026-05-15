@@ -1,2 +1,3 @@
 created_pacific_time,run_id,notes
 2026-05-05T12:25:48,run_ID_20260505_122548_28a564,adding in individual interpreter noise
+2026-05-15T12:59:03,run_ID_20260515_125836_7607aa,"Baseline run — clean sensor, minimal interpreter noise",experiment_outputs/baseline_run_ID_20260515_125836_7607aa

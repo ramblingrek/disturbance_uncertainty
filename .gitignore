@@ -20,6 +20,9 @@ CLAUDE.md
 # Experiment output — ignore individual run CSVs, keep master logger
 experiment_logs/run_ID_*.csv
 
+# Experiment output folders (figures, per-stack PNGs, metrics CSVs)
+experiment_outputs/
+
 # Virtual environments (if one is added later)
 .venv/
 venv/

@@ -16,11 +16,7 @@ import json
 import os
 import sys
 
-# Non-interactive backend — must be set before any other matplotlib import
-# so plt.show() calls inside library methods are no-ops and don't open windows.
 import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 # Resolve src/ relative to this script's location
 PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -67,7 +63,11 @@ def run_experiment(json_path: str, log_dir: str = "experiment_logs/") -> str:
     Execute a full experiment from a JSON config file.
 
     Returns the run_id so callers can locate the output folder.
+    Can be called directly from a notebook after import — matplotlib
+    backend is left as-is so figures display inline.
+    When run as a script, __main__ sets the Agg backend first.
     """
+    import matplotlib.pyplot as plt
 
     # ── Load config ──────────────────────────────────────────────────────
     _print_section(f"Loading config: {json_path}")
@@ -247,5 +247,9 @@ if __name__ == "__main__":
     if not os.path.exists(args.config):
         print(f"ERROR: config file not found: {args.config}")
         sys.exit(1)
+
+    # Non-interactive backend so plt.show() is a no-op and no windows open.
+    # Must be set before pyplot is imported (which happens inside run_experiment).
+    matplotlib.use("Agg")
 
     run_experiment(args.config, log_dir=args.log_dir)
