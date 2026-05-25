@@ -6,6 +6,7 @@ import pandas as pd
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from scipy.optimize import curve_fit
+from scipy.stats import norm
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import ListedColormap
@@ -1086,40 +1087,49 @@ class LandscapeStackCollection:
         coords = (xs.ravel(), ys.ravel())
     
         areas = np.empty(n_iter, dtype=float)
-    
+        exceedance_acc = np.zeros((nrows, ncols), dtype=float)
+        thr_acc = np.zeros((nrows, ncols), dtype=float)
+
         for i in range(n_iter):
             m_i = _resolve_sampler(m, rng)
             l_i = _resolve_sampler(l, rng)
-    
+
             # keep in bounds
             m_i = float(np.clip(m_i, 0.0, 1.0))
             l_i = max(float(l_i), 1e-6)
-    
+
             # Spatial Gaussian random field G ~ N(0,1) correlated
             model = gs.Gaussian(dim=2, var=1.0, len_scale=l_i)
             srf = gs.SRF(model, seed=int(rng.integers(0, 2**31 - 1)))
-    
+
             g = srf(coords).reshape((nrows, ncols))  # ~N(0,1)
-    
-            # Threshold surface centered on m_i
-            thr = np.clip(m_i + float(sigma) * g, 0.0, 1.0)
-    
+
+            # Transform N(0,1) field to uniform [0,1] via normal CDF
+            thr = norm.cdf(g)
+
             # Apply mask (valid pixels only)
             disturbed = valid & (prob01 > thr)
-    
+
             areas[i] = float(disturbed.sum()) * float(pixel_area)
-    
+            exceedance_acc += disturbed.astype(float)
+            thr_acc += thr
+
+        exceedance_freq = exceedance_acc / n_iter
+        mean_thr = thr_acc / n_iter
+
         # Histogram of areas (density)
         hist, bin_edges = np.histogram(areas, bins=bins, density=True)
-    
+
         # Also provide proportion distribution for convenience (over valid pixels)
         proportions = areas / total_area if total_area > 0 else np.full_like(areas, np.nan)
-    
+
         return {
             "areas": areas,
             "proportions": proportions,
             "hist": hist,
             "bin_edges": bin_edges,
+            "exceedance_freq": exceedance_freq,
+            "mean_thr": mean_thr,
             "pixel_area": float(pixel_area),
             "total_area_valid": float(total_area),
             "n_iter": int(n_iter),
