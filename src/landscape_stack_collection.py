@@ -777,47 +777,50 @@ class LandscapeStackCollection:
 
         y01 = np.clip(y_interp / 100.0, 0.0, 1.0)
 
-        # 3) 
-        # ---- Initial guesses ----
-        x0_init = 0.5
-        b_init = 5.0
-        nu_init = 1.0
-        p0 = [x0_init, b_init, nu_init]
-        
-        # ---- Bounds ----
-        bounds = (
-            [0.0,  1e-6,  1e-3],   # x0, b, nu
-            [1.0, 80.0,  50.0],
-                    )
-        
+        # 3) Fit Richards via curve_fit with a data-adaptive pivot (x0 seeded from
+        #    the median of x) and hard bounds.  Post-hoc endpoint rescaling then
+        #    stretches/shifts the curve so that f_scaled(0)=0 and f_scaled(1)=1,
+        #    correcting the OLS tendency to miss the corners.
+        x0_init = float(np.clip(np.percentile(x01, 50), 0.01, 0.99))
+        p0      = [x0_init, 5.0, 1.0]
+        bounds  = ([0.0, 0.1, 0.01], [1.0, 50.0, 20.0])
+
         try:
-            params, cov = curve_fit(
+            popt, _ = curve_fit(
                 richards,
-                x01,
-                y01,
+                x01, y01,
                 p0=p0,
                 bounds=bounds,
-                maxfev=30000,
+                maxfev=5000,
             )
-            x0_hat, b_hat, nu_hat = params
-            
+            x0_hat, b_hat, nu_hat = float(popt[0]), float(popt[1]), float(popt[2])
         except Exception as e:
-            print("Warning: Richards fit failed; falling back to defaults:", e)
-            x0_hat, b_hat, nu_hat = 0.5, 0.0, 1.0
+            print("Warning: curve_fit Richards failed; using defaults:", e)
+            x0_hat, b_hat, nu_hat = 0.5, 5.0, 1.0
+
+        # Post-hoc endpoint rescaling: stretch/shift so f_scaled(0)=0, f_scaled(1)=1.
+        scale_lo   = float(richards(0.0, x0_hat, b_hat, nu_hat))
+        scale_hi   = float(richards(1.0, x0_hat, b_hat, nu_hat))
+        scale_span = scale_hi - scale_lo
+        if scale_span < 1e-6:
+            scale_lo, scale_hi, scale_span = 0.0, 1.0, 1.0
+
+        def _scaled_richards(x: np.ndarray) -> np.ndarray:
+            return (richards(x, x0_hat, b_hat, nu_hat) - scale_lo) / scale_span
 
         # -----------------------------
         # Diagnostic plot: fit + residuals
         # -----------------------------
-        # Predicted y from fitted Richards
-        yhat = richards(x01, x0_hat, b_hat, nu_hat)
+        # Predicted y from rescaled Richards
+        yhat  = _scaled_richards(x01)
         resid = y01 - yhat
-        
+
         rmse = float(np.sqrt(np.mean(resid**2)))
         mae  = float(np.mean(np.abs(resid)))
-        
+
         # Smooth fitted curve for display
         x_plot = np.linspace(float(np.min(x01)), float(np.max(x01)), 400)
-        y_plot = richards(x_plot, x0_hat, b_hat, nu_hat)
+        y_plot = _scaled_richards(x_plot)
         
         fig, ax = plt.subplots(1, 2, figsize=(14, 5))
         
@@ -882,6 +885,8 @@ class LandscapeStackCollection:
             "x0": float(x0_hat),
             "b": float(b_hat),
             "nu": float(nu_hat),
+            "scale_lo": float(scale_lo),
+            "scale_hi": float(scale_hi),
             "n_samples": int(len(x01)),
             "n_strata": int(n_strata),
             "samples_per_stratum": int(samples_per_stratum),
@@ -926,12 +931,18 @@ class LandscapeStackCollection:
                 )
             model_info = self.interpreter_prob_models[sensor_name]
     
-        x0_hat = float(model_info["x0"])
-        b_hat  = float(model_info["b"])
-        nu_hat = float(model_info["nu"])
+        x0_hat     = float(model_info["x0"])
+        b_hat      = float(model_info["b"])
+        nu_hat     = float(model_info["nu"])
+        scale_lo   = float(model_info.get("scale_lo", 0.0))
+        scale_hi   = float(model_info.get("scale_hi", 1.0))
+        scale_span = scale_hi - scale_lo
+        if scale_span < 1e-6:
+            scale_span = 1.0
 
         def _apply_fn(x01: np.ndarray) -> np.ndarray:
-            return np.clip(richards(x01, x0=x0_hat, b=b_hat, nu=nu_hat), 0.0, 1.0)
+            raw = richards(x01, x0=x0_hat, b=b_hat, nu=nu_hat)
+            return np.clip((raw - scale_lo) / scale_span, 0.0, 1.0)
     
         # ---- apply to each stack ----
         for stack in self.stacks:
