@@ -191,8 +191,7 @@
     "sensor_name": "Optical Sensor 1",
     "n_strata": 5,
     "samples_per_stratum": 100,
-    "sampling_seed": 11,
-    "iqr_fence": 1.5
+    "sampling_seed": 11
   },
 
   "training_interp_config": {

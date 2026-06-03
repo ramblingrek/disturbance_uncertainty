@@ -737,7 +737,6 @@ class LandscapeStackCollection:
         samples_per_stratum: int = 200,
         sampling_seed: Optional[int] = int(time.time()),
         interpreter_agent: Optional[InterpreterAgent] = None,
-        iqr_fence: float = 1.5,
     ) -> Dict[str, Any]:
         """
         Fit a RICHARDS function mapping MODEL probabilities (from calibrated_prob_by_sensor)
@@ -778,44 +777,18 @@ class LandscapeStackCollection:
 
         y01 = np.clip(y_interp / 100.0, 0.0, 1.0)
 
-        # 2b) Stratified IQR outlier removal.  Within each equal-width x-stratum,
-        #     flag points where y falls outside 1.5·IQR.  Strata with fewer than
-        #     4 points are skipped (IQR estimate would be unreliable).
-        iqr_edges = np.linspace(float(x01.min()), float(x01.max()), n_strata + 1)
-        bin_ids   = np.digitize(x01, iqr_edges[1:-1], right=False)
-
-        inlier_mask = np.ones(len(x01), dtype=bool)
-        for _k in range(n_strata):
-            m = (bin_ids == _k)
-            if m.sum() < 4:
-                continue
-            y_bin = y01[m]
-            q1, q3 = np.percentile(y_bin, 25), np.percentile(y_bin, 75)
-            iqr = q3 - q1
-            lo_fence = q1 - iqr_fence * iqr
-            hi_fence = q3 + iqr_fence * iqr
-            inlier_mask[m & ((y01 < lo_fence) | (y01 > hi_fence))] = False
-
-        n_removed = int((~inlier_mask).sum())
-        print(f"  Outlier removal: {n_removed}/{len(x01)} points flagged by stratified IQR")
-
-        x01_fit = x01[inlier_mask]
-        y01_fit = y01[inlier_mask]
-        x01_out = x01[~inlier_mask]
-        y01_out = y01[~inlier_mask]
-
         # 3) Fit Richards via curve_fit with a data-adaptive pivot (x0 seeded from
         #    the median of x) and hard bounds.  Post-hoc endpoint rescaling then
         #    stretches/shifts the curve so that f_scaled(0)=0 and f_scaled(1)=1,
         #    correcting the OLS tendency to miss the corners.
-        x0_init = float(np.clip(np.percentile(x01_fit, 50), 0.01, 0.99))
+        x0_init = float(np.clip(np.percentile(x01, 50), 0.01, 0.99))
         p0      = [x0_init, 5.0, 1.0]
         bounds  = ([0.0, 0.1, 0.01], [1.0, 50.0, 20.0])
 
         try:
             popt, _ = curve_fit(
                 richards,
-                x01_fit, y01_fit,
+                x01, y01,
                 p0=p0,
                 bounds=bounds,
                 maxfev=5000,
@@ -838,17 +811,11 @@ class LandscapeStackCollection:
         # -----------------------------
         # Diagnostic plot: fit + residuals
         # -----------------------------
-        # Residuals on inlier (fit) points only — what the model was optimized on
-        yhat_fit  = _scaled_richards(x01_fit)
-        resid_fit = y01_fit - yhat_fit
+        yhat  = _scaled_richards(x01)
+        resid = y01 - yhat
 
-        rmse = float(np.sqrt(np.mean(resid_fit**2)))
-        mae  = float(np.mean(np.abs(resid_fit)))
-
-        # Residuals on outlier points — shown separately so their position relative
-        # to the fit is visible without influencing the fit metrics
-        yhat_out  = _scaled_richards(x01_out) if len(x01_out) else np.array([])
-        resid_out = y01_out - yhat_out if len(x01_out) else np.array([])
+        rmse = float(np.sqrt(np.mean(resid**2)))
+        mae  = float(np.mean(np.abs(resid)))
 
         # Smooth fitted curve for display
         x_plot = np.linspace(float(np.min(x01)), float(np.max(x01)), 400)
@@ -858,15 +825,12 @@ class LandscapeStackCollection:
 
         # ---- Panel 1: data + fit ----
         ax0 = ax[0]
-        ax0.scatter(x01_fit, y01_fit, s=12, alpha=0.5, color="gray", label=f"Inliers (n={len(x01_fit)})")
-        if len(x01_out):
-            ax0.scatter(x01_out, y01_out, s=18, alpha=0.8, color="orange",
-                        marker="x", linewidths=1.2, label=f"Outliers removed (n={len(x01_out)})")
+        ax0.scatter(x01, y01, s=12, alpha=0.5, color="gray", label="Samples")
         ax0.plot(x_plot, y_plot, color="black", linewidth=2, label="Richards fit")
 
         ax0.set_title(
             f"Interpreter prob vs model prob (Richards)\n"
-            f"sensor={sensor_name}, n_fit={len(x01_fit)} ({n_removed} removed)\n"
+            f"sensor={sensor_name}, n={len(x01)}\n"
             f"x0={x0_hat:.3f}, b={b_hat:.3f}, nu={nu_hat:.3f}"
         )
         ax0.set_xlabel("Model probability x (0–1)")
@@ -878,17 +842,14 @@ class LandscapeStackCollection:
 
         ax0.text(
             0.02, 0.98,
-            f"RMSE={rmse:.3f}\nMAE={mae:.3f}\n(inliers only)",
+            f"RMSE={rmse:.3f}\nMAE={mae:.3f}",
             transform=ax0.transAxes,
             va="top",
         )
 
         # ---- Panel 2: residuals vs x ----
         ax1 = ax[1]
-        ax1.scatter(x01_fit, resid_fit, s=12, alpha=0.5, color="gray", label="Inliers")
-        if len(x01_out):
-            ax1.scatter(x01_out, resid_out, s=18, alpha=0.8, color="orange",
-                        marker="x", linewidths=1.2, label="Outliers")
+        ax1.scatter(x01, resid, s=12, alpha=0.5, color="gray")
         ax1.axhline(0.0, color="black", linewidth=1)
 
         ax1.set_title("Residuals: (y − ŷ) vs model prob")
@@ -896,15 +857,14 @@ class LandscapeStackCollection:
         ax1.set_ylabel("Residual (y − ŷ)")
         ax1.set_xlim(0, 1)
         ax1.grid(alpha=0.3)
-        ax1.legend(frameon=True, fontsize=8)
 
-        # Residual summaries by x-bin (inliers only)
+        # Residual summaries by x-bin
         bins = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
-        bin_ids_fit = np.digitize(x01_fit, bins[1:-1], right=False)
+        bin_ids = np.digitize(x01, bins[1:-1], right=False)
         for i in range(len(bins) - 1):
-            m = (bin_ids_fit == i)
+            m = (bin_ids == i)
             if np.any(m):
-                med = float(np.median(resid_fit[m]))
+                med = float(np.median(resid[m]))
                 ax1.text(
                     0.02, 0.95 - i * 0.08,
                     f"{bins[i]:.1f}–{bins[i+1]:.1f}: median={med:+.3f} (n={m.sum()})",
@@ -912,10 +872,10 @@ class LandscapeStackCollection:
                     va="top",
                     fontsize=9,
                 )
-        
+
         plt.tight_layout()
         plt.show()
-        print(f"Sample size: {len(x01)} total, {len(x01_fit)} used for fit ({n_removed} removed)")
+        print(f"Sample size: {len(x01)}")
 
         
         model_info = {
