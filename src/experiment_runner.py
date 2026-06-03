@@ -147,6 +147,7 @@ def run_experiment(json_path: str, log_dir: str = "experiment_logs/") -> str:
         samples_per_stratum=ipm["samples_per_stratum"],
         sampling_seed=ipm["sampling_seed"],
         interpreter_agent=val_interp,
+        iqr_fence=ipm.get("iqr_fence", 1.5),
     )
     val_collection.applyInterpreterProbModel(
         sensor_name=ipm["sensor_name"],
