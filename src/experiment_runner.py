@@ -6,8 +6,8 @@ Run a full train/validate experiment from a JSON config file and save
 all outputs (figures, CSVs, experiment log) to an organized folder.
 
 Usage:
-    python experiment_runner.py experiments/configs/baseline.json
-    python experiment_runner.py experiments/configs/baseline.json --log-dir my_logs/
+    python src/experiment_runner.py experiments/configs/baseline.json
+    python src/experiment_runner.py experiments/configs/baseline.json --log-dir my_logs/
 """
 
 import argparse
@@ -18,9 +18,10 @@ import sys
 
 import matplotlib
 
-# Resolve src/ relative to this script's location
-PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(PROJ_ROOT, "src"))
+# Resolve project root relative to this script's location (src/experiment_runner.py)
+SRC_DIR   = os.path.dirname(os.path.abspath(__file__))
+PROJ_ROOT = os.path.dirname(SRC_DIR)
+sys.path.insert(0, SRC_DIR)
 
 from landscape_stack_collection import LandscapeStackCollection
 from interpreter_agent import InterpreterAgent
