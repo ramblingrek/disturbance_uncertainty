@@ -737,6 +737,10 @@ class LandscapeStackCollection:
         samples_per_stratum: int = 200,
         sampling_seed: Optional[int] = int(time.time()),
         interpreter_agent: Optional[InterpreterAgent] = None,
+        ransac_n_iter: int = 200,
+        ransac_min_sample: int = 10,
+        ransac_inlier_eps: float = 0.15,
+        ransac_min_inlier_frac: float = 0.66,
     ) -> Dict[str, Any]:
         """
         Fit a RICHARDS function mapping MODEL probabilities (from calibrated_prob_by_sensor)
@@ -777,25 +781,71 @@ class LandscapeStackCollection:
 
         y01 = np.clip(y_interp / 100.0, 0.0, 1.0)
 
-        # 3) Fit Richards via curve_fit with a data-adaptive pivot (x0 seeded from
-        #    the median of x) and hard bounds.  Post-hoc endpoint rescaling then
-        #    stretches/shifts the curve so that f_scaled(0)=0 and f_scaled(1)=1,
-        #    correcting the OLS tendency to miss the corners.
-        x0_init = float(np.clip(np.percentile(x01, 50), 0.01, 0.99))
-        p0      = [x0_init, 5.0, 1.0]
+        # 3) RANSAC outlier removal + Richards fit.
+        #
+        #    Each iteration draws ransac_min_sample points, fits Richards, then
+        #    counts inliers across the full dataset (|y - ŷ| ≤ ransac_inlier_eps).
+        #    The iteration with the most inliers wins.  The final Richards fit uses
+        #    all inliers from the winning iteration.
+        #
+        #    Fallback to all data if: every curve_fit call fails, or the best
+        #    inlier count is below ransac_min_inlier_frac × n.
+        #
+        #    Scoring uses raw (unrescaled) Richards to avoid the overhead of two
+        #    extra evaluations per iteration; endpoint rescaling is applied once
+        #    on the final fit only.
         bounds  = ([0.0, 0.1, 0.01], [1.0, 50.0, 20.0])
+        x0_global = float(np.clip(np.percentile(x01, 50), 0.01, 0.99))
+        p0_global = [x0_global, 5.0, 1.0]
+
+        rng_ransac = np.random.default_rng(sampling_seed)
+        min_inliers_required = int(ransac_min_inlier_frac * len(x01))
+
+        best_inlier_mask  = None
+        best_inlier_count = 0
+
+        for _ in range(ransac_n_iter):
+            idx = rng_ransac.choice(len(x01), size=ransac_min_sample, replace=False)
+            try:
+                popt_iter, _ = curve_fit(
+                    richards, x01[idx], y01[idx],
+                    p0=p0_global, bounds=bounds, maxfev=2000,
+                )
+            except Exception:
+                continue
+            resid_iter = np.abs(y01 - richards(x01, *popt_iter))
+            mask_iter  = resid_iter <= ransac_inlier_eps
+            n_in = int(mask_iter.sum())
+            if n_in > best_inlier_count:
+                best_inlier_count = n_in
+                best_inlier_mask  = mask_iter
+
+        if best_inlier_mask is None or best_inlier_count < min_inliers_required:
+            print(
+                f"  RANSAC: best inlier count {best_inlier_count} "
+                f"< required {min_inliers_required}; falling back to all data."
+            )
+            best_inlier_mask = np.ones(len(x01), dtype=bool)
+
+        x01_fit = x01[best_inlier_mask]
+        y01_fit = y01[best_inlier_mask]
+        x01_out = x01[~best_inlier_mask]
+        y01_out = y01[~best_inlier_mask]
+        n_removed = int((~best_inlier_mask).sum())
+        print(f"  RANSAC: {best_inlier_count}/{len(x01)} inliers, {n_removed} removed")
+
+        # Final fit on inlier set with data-adaptive p0
+        x0_init = float(np.clip(np.percentile(x01_fit, 50), 0.01, 0.99))
+        p0      = [x0_init, 5.0, 1.0]
 
         try:
             popt, _ = curve_fit(
-                richards,
-                x01, y01,
-                p0=p0,
-                bounds=bounds,
-                maxfev=5000,
+                richards, x01_fit, y01_fit,
+                p0=p0, bounds=bounds, maxfev=5000,
             )
             x0_hat, b_hat, nu_hat = float(popt[0]), float(popt[1]), float(popt[2])
         except Exception as e:
-            print("Warning: curve_fit Richards failed; using defaults:", e)
+            print("Warning: final curve_fit Richards failed; using defaults:", e)
             x0_hat, b_hat, nu_hat = 0.5, 5.0, 1.0
 
         # Post-hoc endpoint rescaling: stretch/shift so f_scaled(0)=0, f_scaled(1)=1.
@@ -811,13 +861,16 @@ class LandscapeStackCollection:
         # -----------------------------
         # Diagnostic plot: fit + residuals
         # -----------------------------
-        yhat  = _scaled_richards(x01)
-        resid = y01 - yhat
+        # Metrics on inlier set (what the final fit was optimised on)
+        yhat_fit  = _scaled_richards(x01_fit)
+        resid_fit = y01_fit - yhat_fit
+        rmse = float(np.sqrt(np.mean(resid_fit**2)))
+        mae  = float(np.mean(np.abs(resid_fit)))
 
-        rmse = float(np.sqrt(np.mean(resid**2)))
-        mae  = float(np.mean(np.abs(resid)))
+        # Residuals for outlier points (shown but excluded from metrics)
+        yhat_out  = _scaled_richards(x01_out) if len(x01_out) else np.array([])
+        resid_out = y01_out - yhat_out         if len(x01_out) else np.array([])
 
-        # Smooth fitted curve for display
         x_plot = np.linspace(float(np.min(x01)), float(np.max(x01)), 400)
         y_plot = _scaled_richards(x_plot)
 
@@ -825,12 +878,16 @@ class LandscapeStackCollection:
 
         # ---- Panel 1: data + fit ----
         ax0 = ax[0]
-        ax0.scatter(x01, y01, s=12, alpha=0.5, color="gray", label="Samples")
+        ax0.scatter(x01_fit, y01_fit, s=12, alpha=0.5, color="gray",
+                    label=f"Inliers (n={len(x01_fit)})")
+        if len(x01_out):
+            ax0.scatter(x01_out, y01_out, s=12, alpha=0.6, color="orange",
+                        label=f"RANSAC outliers (n={len(x01_out)})")
         ax0.plot(x_plot, y_plot, color="black", linewidth=2, label="Richards fit")
 
         ax0.set_title(
             f"Interpreter prob vs model prob (Richards)\n"
-            f"sensor={sensor_name}, n={len(x01)}\n"
+            f"sensor={sensor_name}, n_fit={len(x01_fit)} ({n_removed} removed)\n"
             f"x0={x0_hat:.3f}, b={b_hat:.3f}, nu={nu_hat:.3f}"
         )
         ax0.set_xlabel("Model probability x (0–1)")
@@ -839,43 +896,42 @@ class LandscapeStackCollection:
         ax0.set_ylim(0, 1)
         ax0.grid(alpha=0.3)
         ax0.legend(frameon=True)
-
         ax0.text(
             0.02, 0.98,
-            f"RMSE={rmse:.3f}\nMAE={mae:.3f}",
-            transform=ax0.transAxes,
-            va="top",
+            f"RMSE={rmse:.3f}\nMAE={mae:.3f}\n(inliers only)",
+            transform=ax0.transAxes, va="top",
         )
 
         # ---- Panel 2: residuals vs x ----
         ax1 = ax[1]
-        ax1.scatter(x01, resid, s=12, alpha=0.5, color="gray")
+        ax1.scatter(x01_fit, resid_fit, s=12, alpha=0.5, color="gray", label="Inliers")
+        if len(x01_out):
+            ax1.scatter(x01_out, resid_out, s=12, alpha=0.6, color="orange",
+                        label="Outliers")
         ax1.axhline(0.0, color="black", linewidth=1)
-
         ax1.set_title("Residuals: (y − ŷ) vs model prob")
         ax1.set_xlabel("Model probability x (0–1)")
         ax1.set_ylabel("Residual (y − ŷ)")
         ax1.set_xlim(0, 1)
         ax1.grid(alpha=0.3)
+        ax1.legend(frameon=True, fontsize=8)
 
-        # Residual summaries by x-bin
+        # Residual summaries by x-bin (inliers only)
         bins = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
-        bin_ids = np.digitize(x01, bins[1:-1], right=False)
+        bin_ids_fit = np.digitize(x01_fit, bins[1:-1], right=False)
         for i in range(len(bins) - 1):
-            m = (bin_ids == i)
+            m = (bin_ids_fit == i)
             if np.any(m):
-                med = float(np.median(resid[m]))
+                med = float(np.median(resid_fit[m]))
                 ax1.text(
                     0.02, 0.95 - i * 0.08,
                     f"{bins[i]:.1f}–{bins[i+1]:.1f}: median={med:+.3f} (n={m.sum()})",
-                    transform=ax1.transAxes,
-                    va="top",
-                    fontsize=9,
+                    transform=ax1.transAxes, va="top", fontsize=9,
                 )
 
         plt.tight_layout()
         plt.show()
-        print(f"Sample size: {len(x01)}")
+        print(f"Sample size: {len(x01)} total, {len(x01_fit)} used for fit ({n_removed} removed)")
 
         
         model_info = {

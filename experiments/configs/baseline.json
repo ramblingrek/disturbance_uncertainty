@@ -191,7 +191,11 @@
     "sensor_name": "Optical Sensor 1",
     "n_strata": 5,
     "samples_per_stratum": 100,
-    "sampling_seed": 11
+    "sampling_seed": 11,
+    "ransac_n_iter": 200,
+    "ransac_min_sample": 10,
+    "ransac_inlier_eps": 0.15,
+    "ransac_min_inlier_frac": 0.66
   },
 
   "training_interp_config": {

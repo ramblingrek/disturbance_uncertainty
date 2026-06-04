@@ -147,6 +147,10 @@ def run_experiment(json_path: str, log_dir: str = "experiment_logs/") -> str:
         samples_per_stratum=ipm["samples_per_stratum"],
         sampling_seed=ipm["sampling_seed"],
         interpreter_agent=val_interp,
+        ransac_n_iter=ipm.get("ransac_n_iter", 200),
+        ransac_min_sample=ipm.get("ransac_min_sample", 10),
+        ransac_inlier_eps=ipm.get("ransac_inlier_eps", 0.15),
+        ransac_min_inlier_frac=ipm.get("ransac_min_inlier_frac", 0.66),
     )
     val_collection.applyInterpreterProbModel(
         sensor_name=ipm["sensor_name"],
