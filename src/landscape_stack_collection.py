@@ -834,89 +834,151 @@ class LandscapeStackCollection:
         n_removed = int((~best_inlier_mask).sum())
         print(f"  RANSAC: {best_inlier_count}/{len(x01)} inliers, {n_removed} removed")
 
-        # Final fit on inlier set with data-adaptive p0
+        # 4) Multi-model competition on the inlier set.
+        #    Each candidate is fit via curve_fit, endpoint-rescaled (so f(0)=0,
+        #    f(1)=1), checked for monotonicity, then scored by AIC.
+        #    AIC = n·log(RSS/n) + 2k.  Lowest AIC wins.
+        #    Non-monotone candidates are silently discarded.
+        #    If every fit fails, falls back to a Richards with default params.
+
+        _inf = np.inf
+
+        def _rescale_and_score(name, raw_fn, p0, bounds_lo, bounds_hi, k):
+            try:
+                popt, _ = curve_fit(
+                    raw_fn, x01_fit, y01_fit,
+                    p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=5000,
+                )
+            except Exception:
+                return None
+            lo   = float(raw_fn(0.0, *popt))
+            hi   = float(raw_fn(1.0, *popt))
+            span = hi - lo
+            if abs(span) < 1e-6:
+                return None
+            _popt, _lo, _span = popt, lo, span  # capture for closure
+            def scaled(x):
+                return (raw_fn(x, *_popt) - _lo) / _span
+            if not np.all(np.diff(scaled(np.linspace(0.0, 1.0, 200))) >= -1e-6):
+                return None
+            y_pred = scaled(x01_fit)
+            n      = len(y01_fit)
+            rss    = float(np.sum((y01_fit - y_pred) ** 2))
+            return {
+                "name":     name,
+                "k":        k,
+                "params":   [float(p) for p in popt],
+                "scale_lo": lo,
+                "scale_hi": hi,
+                "predict":  scaled,
+                "aic":      n * np.log(rss / n + 1e-12) + 2 * k,
+                "rmse":     float(np.sqrt(rss / n)),
+                "mae":      float(np.mean(np.abs(y01_fit - y_pred))),
+            }
+
         x0_init = float(np.clip(np.percentile(x01_fit, 50), 0.01, 0.99))
-        p0      = [x0_init, 5.0, 1.0]
 
-        try:
-            popt, _ = curve_fit(
-                richards, x01_fit, y01_fit,
-                p0=p0, bounds=bounds, maxfev=5000,
-            )
-            x0_hat, b_hat, nu_hat = float(popt[0]), float(popt[1]), float(popt[2])
-        except Exception as e:
-            print("Warning: final curve_fit Richards failed; using defaults:", e)
-            x0_hat, b_hat, nu_hat = 0.5, 5.0, 1.0
+        candidates = list(filter(None, [
+            _rescale_and_score(
+                "linear", lambda x, a, b: a * x + b,
+                [1.0, 0.0], [-_inf, -_inf], [_inf, _inf], 2),
+            _rescale_and_score(
+                "quadratic", lambda x, a, b, d: a * x**2 + b * x + d,
+                [0.0, 1.0, 0.0], [-_inf, -_inf, -_inf], [_inf, _inf, _inf], 3),
+            _rescale_and_score(
+                "power", lambda x, a, b: a * np.clip(x, 1e-9, None) ** b,
+                [1.0, 1.0], [1e-6, 1e-6], [_inf, _inf], 2),
+            _rescale_and_score(
+                "richards", richards,
+                [x0_init, 5.0, 1.0], [0.0, 0.1, 0.01], [1.0, 50.0, 20.0], 3),
+        ]))
 
-        # Post-hoc endpoint rescaling: stretch/shift so f_scaled(0)=0, f_scaled(1)=1.
-        scale_lo   = float(richards(0.0, x0_hat, b_hat, nu_hat))
-        scale_hi   = float(richards(1.0, x0_hat, b_hat, nu_hat))
-        scale_span = scale_hi - scale_lo
-        if scale_span < 1e-6:
-            scale_lo, scale_hi, scale_span = 0.0, 1.0, 1.0
+        if not candidates:
+            print("Warning: all model fits failed; using Richards identity fallback.")
+            def _fallback(x):
+                return np.clip(x, 0.0, 1.0)
+            winner = {
+                "name": "richards", "k": 3,
+                "params": [0.5, 5.0, 1.0], "scale_lo": 0.0, "scale_hi": 1.0,
+                "predict": _fallback, "aic": np.inf, "rmse": np.nan, "mae": np.nan,
+            }
+            candidates = [winner]
+        else:
+            candidates.sort(key=lambda c: c["aic"])
+            winner = candidates[0]
 
-        def _scaled_richards(x: np.ndarray) -> np.ndarray:
-            return (richards(x, x0_hat, b_hat, nu_hat) - scale_lo) / scale_span
+        aic_delta = (winner["aic"] - candidates[1]["aic"]) if len(candidates) > 1 else 0.0
+        print(
+            f"  Model winner: {winner['name']}  "
+            f"AIC={winner['aic']:.1f}  Δ={aic_delta:.1f}  "
+            f"RMSE={winner['rmse']:.3f}  MAE={winner['mae']:.3f}"
+        )
 
         # -----------------------------
         # Diagnostic plot: fit + residuals
         # -----------------------------
-        # Metrics on inlier set (what the final fit was optimised on)
-        yhat_fit  = _scaled_richards(x01_fit)
+        _COLORS = {
+            "linear": "#4C72B0", "quadratic": "#55A868",
+            "power":  "#8172B2", "richards":  "#C44E52",
+        }
+
+        yhat_fit  = winner["predict"](x01_fit)
         resid_fit = y01_fit - yhat_fit
-        rmse = float(np.sqrt(np.mean(resid_fit**2)))
-        mae  = float(np.mean(np.abs(resid_fit)))
+        yhat_out  = winner["predict"](x01_out) if len(x01_out) else np.array([])
+        resid_out = y01_out - yhat_out          if len(x01_out) else np.array([])
 
-        # Residuals for outlier points (shown but excluded from metrics)
-        yhat_out  = _scaled_richards(x01_out) if len(x01_out) else np.array([])
-        resid_out = y01_out - yhat_out         if len(x01_out) else np.array([])
-
-        x_plot = np.linspace(float(np.min(x01)), float(np.max(x01)), 400)
-        y_plot = _scaled_richards(x_plot)
+        x_plot = np.linspace(0.0, 1.0, 400)
 
         fig, ax = plt.subplots(1, 2, figsize=(14, 5))
 
-        # ---- Panel 1: data + fit ----
+        # ---- Panel 1: scatter + all candidate curves ----
         ax0 = ax[0]
         ax0.scatter(x01_fit, y01_fit, s=12, alpha=0.5, color="gray",
-                    label=f"Inliers (n={len(x01_fit)})")
+                    label=f"Inliers (n={len(x01_fit)})", zorder=2)
         if len(x01_out):
             ax0.scatter(x01_out, y01_out, s=12, alpha=0.6, color="orange",
-                        label=f"RANSAC outliers (n={len(x01_out)})")
-        ax0.plot(x_plot, y_plot, color="black", linewidth=2, label="Richards fit")
+                        label=f"RANSAC outliers (n={len(x01_out)})", zorder=2)
+        for c in candidates:
+            if c["name"] != winner["name"]:
+                ax0.plot(x_plot, c["predict"](x_plot),
+                         color=_COLORS.get(c["name"], "gray"),
+                         linewidth=1, linestyle="--", alpha=0.7,
+                         label=f"{c['name']} (AIC={c['aic']:.0f})")
+        ax0.plot(x_plot, winner["predict"](x_plot),
+                 color="black", linewidth=2,
+                 label=f"{winner['name']} ★ (AIC={winner['aic']:.0f})")
 
         ax0.set_title(
-            f"Interpreter prob vs model prob (Richards)\n"
+            f"Interpreter prob vs model prob — winner: {winner['name']}\n"
             f"sensor={sensor_name}, n_fit={len(x01_fit)} ({n_removed} removed)\n"
-            f"x0={x0_hat:.3f}, b={b_hat:.3f}, nu={nu_hat:.3f}"
+            f"ΔAIC={aic_delta:.1f} vs runner-up"
         )
         ax0.set_xlabel("Model probability x (0–1)")
         ax0.set_ylabel("Interpreter probability y (0–1)")
         ax0.set_xlim(0, 1)
         ax0.set_ylim(0, 1)
         ax0.grid(alpha=0.3)
-        ax0.legend(frameon=True)
+        ax0.legend(frameon=True, fontsize=8)
         ax0.text(
             0.02, 0.98,
-            f"RMSE={rmse:.3f}\nMAE={mae:.3f}\n(inliers only)",
+            f"RMSE={winner['rmse']:.3f}\nMAE={winner['mae']:.3f}\n(inliers only)",
             transform=ax0.transAxes, va="top",
         )
 
-        # ---- Panel 2: residuals vs x ----
+        # ---- Panel 2: residuals vs x (winner only) ----
         ax1 = ax[1]
         ax1.scatter(x01_fit, resid_fit, s=12, alpha=0.5, color="gray", label="Inliers")
         if len(x01_out):
             ax1.scatter(x01_out, resid_out, s=12, alpha=0.6, color="orange",
                         label="Outliers")
         ax1.axhline(0.0, color="black", linewidth=1)
-        ax1.set_title("Residuals: (y − ŷ) vs model prob")
+        ax1.set_title(f"Residuals: (y − ŷ) vs model prob  [{winner['name']}]")
         ax1.set_xlabel("Model probability x (0–1)")
         ax1.set_ylabel("Residual (y − ŷ)")
         ax1.set_xlim(0, 1)
         ax1.grid(alpha=0.3)
         ax1.legend(frameon=True, fontsize=8)
 
-        # Residual summaries by x-bin (inliers only)
         bins = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
         bin_ids_fit = np.digitize(x01_fit, bins[1:-1], right=False)
         for i in range(len(bins) - 1):
@@ -933,19 +995,24 @@ class LandscapeStackCollection:
         plt.show()
         print(f"Sample size: {len(x01)} total, {len(x01_fit)} used for fit ({n_removed} removed)")
 
-        
         model_info = {
-            "sensor_name": sensor_name,
-            "model_type": "richards",
-            "x0": float(x0_hat),
-            "b": float(b_hat),
-            "nu": float(nu_hat),
-            "scale_lo": float(scale_lo),
-            "scale_hi": float(scale_hi),
-            "n_samples": int(len(x01)),
-            "n_strata": int(n_strata),
+            "sensor_name":         sensor_name,
+            "model_type":          winner["name"],
+            "params":              winner["params"],
+            "scale_lo":            winner["scale_lo"],
+            "scale_hi":            winner["scale_hi"],
+            "aic":                 winner["aic"],
+            "aic_delta":           aic_delta,
+            "n_samples":           int(len(x01)),
+            "n_fit":               int(len(x01_fit)),
+            "n_strata":            int(n_strata),
             "samples_per_stratum": int(samples_per_stratum),
         }
+        # backward compat: keep x0/b/nu keys for Richards so any direct reads still work
+        if winner["name"] == "richards" and len(winner["params"]) == 3:
+            model_info["x0"] = winner["params"][0]
+            model_info["b"]  = winner["params"][1]
+            model_info["nu"] = winner["params"][2]
 
         if not hasattr(self, "interpreter_prob_models"):
             self.interpreter_prob_models: Dict[str, Dict[str, Any]] = {}
@@ -953,7 +1020,8 @@ class LandscapeStackCollection:
 
         print(
             f"Fitted interpreter-probability model for sensor {sensor_name!r}: "
-            f"x0={x0_hat:.3f}, b={b_hat:.3f}, nu={nu_hat:.3f}"
+            f"model={winner['name']}  params={winner['params']}  "
+            f"AIC={winner['aic']:.1f}"
         )
         return model_info
 
@@ -986,18 +1054,34 @@ class LandscapeStackCollection:
                 )
             model_info = self.interpreter_prob_models[sensor_name]
     
-        x0_hat     = float(model_info["x0"])
-        b_hat      = float(model_info["b"])
-        nu_hat     = float(model_info["nu"])
+        model_type = model_info.get("model_type", "richards")
+        params     = model_info.get("params", None)
         scale_lo   = float(model_info.get("scale_lo", 0.0))
         scale_hi   = float(model_info.get("scale_hi", 1.0))
         scale_span = scale_hi - scale_lo
         if scale_span < 1e-6:
             scale_span = 1.0
 
+        # backward compat: old model_info stored x0/b/nu rather than a params list
+        if params is None:
+            params = [float(model_info["x0"]), float(model_info["b"]), float(model_info["nu"])]
+
+        def _raw_fn(x: np.ndarray) -> np.ndarray:
+            if model_type == "linear":
+                a, b = params
+                return a * x + b
+            elif model_type == "quadratic":
+                a, b, d = params
+                return a * x**2 + b * x + d
+            elif model_type == "power":
+                a, b = params
+                return a * np.clip(x, 1e-9, None) ** b
+            else:  # "richards" or unrecognised
+                x0, b, nu = params
+                return richards(x, x0, b, nu)
+
         def _apply_fn(x01: np.ndarray) -> np.ndarray:
-            raw = richards(x01, x0=x0_hat, b=b_hat, nu=nu_hat)
-            return np.clip((raw - scale_lo) / scale_span, 0.0, 1.0)
+            return np.clip((_raw_fn(x01) - scale_lo) / scale_span, 0.0, 1.0)
     
         # ---- apply to each stack ----
         for stack in self.stacks:
