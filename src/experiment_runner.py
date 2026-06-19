@@ -82,7 +82,7 @@ def run_experiment(json_path: str, log_dir: str = "experiment_logs/") -> str:
     print(f"output root : {dirs['root']}")
 
     # ── Fix paths (JSON uses project-root-relative paths) ────────────────
-    stack_cfg     = _fix_path(cfg["landscape_stack_config"],        "tif_path")
+    stack_cfg     = copy.deepcopy(cfg["landscape_stack_config"])
     train_exp_cfg = _fix_path(cfg["training_experiment_config"],    "patch_dir")
     val_exp_cfg   = _fix_path(cfg["validation_experiment_config"],  "patch_dir")
 

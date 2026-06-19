@@ -132,12 +132,10 @@ class LandscapeStackCollection:
             perm = rng_patch.permutation(len(tif_paths))
             tif_paths = [tif_paths[i] for i in perm[:n_stacks]]
         else:
-            tif_path_template = stack_template_cfg.get("tif_path", None)
-            if tif_path_template is None:
-                raise RuntimeError(
-                    "No 'patch_dir' provided in experiment_cfg and no 'tif_path' in stack_template_cfg."
-                )
-            tif_paths = [tif_path_template] * n_stacks
+            raise RuntimeError(
+                "No 'patch_dir' provided in experiment_cfg. "
+                "Add 'patch_dir' to your training_experiment_config or validation_experiment_config."
+            )
 
         stacks: List[LandscapeStack] = []
 

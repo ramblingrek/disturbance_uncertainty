@@ -6,8 +6,6 @@
     "id_prefix": "DL",
     "id_strategy": "hash",
     "explicit_id": null,
-    "tif_path": "downloaded_images/snic_10_2019_-12.004_132.979.tif",
-
     "disturbance_config": {
       "random": {
         "seed": null
