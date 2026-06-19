@@ -95,6 +95,23 @@ Run metadata and the output folder path are recorded in `<sub-project>/experimen
 
 ---
 
+## Sub-project scope
+
+### `continuous_binary/`
+Compares the continuous probability-based area estimator against the traditional binary/Olofsson design-based estimator across many simulated landscapes. Uses the full pipeline: sensor simulation → Richards model fit → interpreter probability calibration → binary classifier → Olofsson area estimation.
+
+### `interpreter/`
+Studies interpreter sampling behaviour. Focuses on the binary paradigm but extends the validation step with window-based sampling approaches that aggregate spatial context rather than treating each pixel independently:
+
+- **Approach A** — every pixel in a W×W window is a sample (per-pixel, `window_size=1` is the classical case)
+- **Approach B** — one sample per window: the dominant pixel-pair combination across the window
+- **Approach C** — one sample per window: majority label computed independently per field
+- **Approach D** — one (prop\_map, prop\_interp) point per window for scatter plot agreement analysis
+
+Window centers are placed by random sequential adsorption (no fixed tiling) to avoid grid artifacts. All approaches use `window_size=1` as the per-pixel special case and feed into the same Olofsson pipeline. See `CONFIG_CHEATSHEET.md` Section 6b for parameters.
+
+---
+
 ## Parameter reference
 
 See `CONFIG_CHEATSHEET.md` for a full description of every config parameter, its sensible range, and which function consumes it.
