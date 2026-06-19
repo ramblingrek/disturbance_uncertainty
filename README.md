@@ -4,18 +4,52 @@ Simulation framework for estimating forest disturbance area from remote sensing 
 
 ---
 
+## Repository structure
+
+```
+disturbance_uncertainty/
+├── src/                        # shared simulation code — both sub-projects use this
+├── continuous_binary/          # sub-project: continuous vs binary paradigm comparison
+│   ├── notebooks/              # numbered development notebooks (00–20)
+│   ├── experiments/configs/    # JSON experiment configs (baseline.json etc.)
+│   └── experiment_logs/        # master_experiment_logger.csv + per-run CSVs
+├── interpreter/                # sub-project: interpreter behaviour studies (in development)
+│   ├── notebooks/
+│   ├── experiments/configs/
+│   └── experiment_logs/
+└── downloaded_images/          # SNIC patch rasters — gitignored, not versioned
+```
+
+Both sub-projects share `src/`. Notebooks use `sys.path.insert(0, os.path.abspath('../../src'))`. Per-run output folders (`experiment_outputs/`) are gitignored in both sub-project directories.
+
+---
+
 ## Running an experiment
 
-Experiments are defined as JSON config files in `experiments/configs/`. A template with all parameters and sensible baseline values is provided at `experiments/configs/baseline.json`.
+Experiments are defined as JSON config files in `<sub-project>/experiments/configs/`. The canonical template is `continuous_binary/experiments/configs/baseline.json`.
 
-Load the JSON and pass each block to the corresponding method:
+Run from the command line:
+
+```bash
+python src/experiment_runner.py continuous_binary/experiments/configs/baseline.json
+```
+
+Or call directly from a notebook:
+
+```python
+import sys; sys.path.insert(0, '../../src')
+from experiment_runner import run_experiment
+run_id = run_experiment('../../continuous_binary/experiments/configs/baseline.json')
+```
+
+The JSON keys and what consumes them:
 
 | JSON key | Used by |
 |---|---|
 | `landscape_stack_config` | `LandscapeStack.from_config()` / `LandscapeStackCollection.from_config()` |
 | `training_experiment_config` | `LandscapeStackCollection.from_config()` for the training collection |
 | `training_model_config` | `buildModel()` arguments |
-| `training_interp_prob_model_config` | `buildInterpreterProbModel()` arguments |
+| `training_interp_prob_model_config` | `buildInterpreterProbModel()` arguments (includes RANSAC params) |
 | `training_interp_config` | `InterpreterAgent(**...)` for model building |
 | `binary_classifier_config` | `buildBinaryClassifier()` arguments |
 | `validation_experiment_config` | `LandscapeStackCollection.from_config()` for the validation collection |
@@ -25,12 +59,12 @@ Load the JSON and pass each block to the corresponding method:
 
 **Notes:**
 - JSON `null` = Python `None`; `true`/`false` = Python booleans
-- `tif_path` in `landscape_stack_config` is a fallback only — `patch_dir` in the experiment configs drives raster selection for collections
+- `patch_dir` in `training_experiment_config` and `validation_experiment_config` drives raster selection; paths are project-root-relative when using `experiment_runner.py`
 - The `interpreter.config.types` block lets type1/type2 have different detection curves and noise levels; omit it to use global defaults for both types
 
 ### Output folder structure
 
-Each run writes outputs to `experiment_outputs/{experiment_name}_{run_id}/`:
+Each run writes outputs to `<sub-project>/experiment_outputs/{experiment_name}_{run_id}/`:
 
 ```
 experiment_outputs/
@@ -48,7 +82,7 @@ experiment_outputs/
         ...
 ```
 
-Run metadata and the output folder path are recorded in `experiment_logs/master_experiment_logger.csv`.
+Run metadata and the output folder path are recorded in `<sub-project>/experiment_logs/master_experiment_logger.csv`.
 
 ---
 
