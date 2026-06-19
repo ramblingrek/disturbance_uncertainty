@@ -351,17 +351,39 @@ class InterpreterField:
     def _apply_lowpass_step(self) -> None:
         """
         Apply spatial smoothing (low-pass filter) to simulate edge effects.
+
+        If any forest type defines its own `lowpass_filter` block in the `types`
+        config, each type gets its own kernel size (falling back to the global
+        default for types that don't). The filter is applied to the full field
+        for each type so boundary pixels are smoothed using real neighbors, then
+        results are stitched together by type mask.
         """
         if self.prob_after_beta is None:
             raise RuntimeError("prob_after_beta is not set.")
 
-        lp_cfg = self.config.get("lowpass_filter", {})
-        ksize = int(lp_cfg.get("kernel_size", 3))
+        prob = self.prob_after_beta
+        types_cfg = self.config.get("types", {})
 
-        smoothed = apply_lowpass_filter(self.prob_after_beta, kernel_size=ksize)
-        smoothed = np.clip(smoothed, 0.0, 1.0)
+        per_type = any(
+            "lowpass_filter" in types_cfg.get(tk, {})
+            for tk in self.truth.type_keys
+        )
 
-        self.prob_after_smoothing = smoothed
+        if not per_type:
+            global_ksize = int(self.config.get("lowpass_filter", {}).get("kernel_size", 3))
+            smoothed = apply_lowpass_filter(prob, kernel_size=global_ksize)
+        else:
+            type_raster = self.truth.forest_type_raster
+            smoothed = np.zeros_like(prob)
+            for t_idx, type_key in enumerate(self.truth.type_keys):
+                mask = (type_raster == t_idx)
+                if not np.any(mask):
+                    continue
+                lp_cfg = self._type_cfg("lowpass_filter", type_key)
+                ksize = int(lp_cfg.get("kernel_size", 3))
+                smoothed[mask] = apply_lowpass_filter(prob, kernel_size=ksize)[mask]
+
+        self.prob_after_smoothing = np.clip(smoothed, 0.0, 1.0)
 
     # ------------------------------------------------------------------
     # Step 4: spatial uncertainty shrink towards 0.5
