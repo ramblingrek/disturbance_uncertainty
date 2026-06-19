@@ -41,10 +41,14 @@ This repo is worked on by two people, each primarily in their own sub-project di
 
 ## Environment
 
-No `requirements.txt` or `pyproject.toml` exists yet. Key dependencies:
-- `numpy`, `scipy`, `matplotlib`, `rasterio` (core)
-- `gstools` (spatially correlated noise — optional but required for spatial noise pipeline steps)
-- `pandas` (used in `LandscapeStackCollection` sampling/evaluation)
+A conda environment file is provided at `environment.yml`. To create the environment:
+
+```bash
+conda env create -f environment.yml
+conda activate spatial_base
+```
+
+Key dependencies: `numpy`, `scipy`, `matplotlib`, `rasterio`, `pandas`, `geopandas`, `gstools` (spatially correlated noise — required for spatial noise pipeline steps), `earthengine-api`, `geemap`, `dask`, `xarray`, `rioxarray`.
 
 Scripts in `src/` assume they are run with `src/` on the Python path (e.g., via notebook `sys.path.insert` or by running from `src/`).
 

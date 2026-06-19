@@ -4,6 +4,15 @@ Simulation framework for estimating forest disturbance area from remote sensing 
 
 ---
 
+## Setup
+
+```bash
+conda env create -f environment.yml
+conda activate spatial_base
+```
+
+---
+
 ## Repository structure
 
 ```

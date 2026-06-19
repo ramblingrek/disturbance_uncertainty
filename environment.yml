@@ -1,0 +1,17 @@
+name: spatial_base
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - rasterio
+  - earthengine-api
+  - pandas
+  - rioxarray
+  - scipy
+  - xarray
+  - geopandas
+  - dask
+  - geemap
+  - matplotlib
+  - ipykernel
+  - gstools
