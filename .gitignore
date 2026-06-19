@@ -12,10 +12,9 @@ __pycache__/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Claude Code — local settings and AI memory
+# Claude Code — local per-user settings and memory (not shared)
 .claude/
 memory/
-CLAUDE.md
 
 # Experiment output — ignore individual run CSVs, keep master logger
 **/experiment_logs/run_ID_*.csv
