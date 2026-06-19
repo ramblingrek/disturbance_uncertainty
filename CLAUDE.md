@@ -127,9 +127,17 @@ The core experiment-running class. Builds N stacks from a template config, assig
 **Binary paradigm**
 - `buildBinaryClassifier()` — finds optimal sensor threshold by sweeping candidate thresholds and minimising a weighted FPR+FNR cost; `fp_to_fn_ratio` controls the tradeoff
 - `plotBinaryCurves()`, `loadBinaryModel()`, `applyBinaryClassifier()` — transfer and apply; stores binary maps in `stack.binary_class_by_sensor`
-- `binary_stratified_sample()` — stratified sample from the binary map with truth labels via an `InterpreterAgent`
+- `binary_stratified_sample()` — stratified sample from the binary map with truth labels via an `InterpreterAgent`; strata are map classes (0/1)
 - `binary_confusion_from_samples()` — confusion matrix (n_ij map×ref)
 - `olofsson_area_estimates()` — Olofsson-style design-based area estimation with 95% CIs; returns whether true disturbed proportion falls within the CI
+
+**Window-based sampling (interpreter sub-project)**
+- `_extract_windows()` — shared backbone; places `n_windows` non-overlapping W×W windows per stack using random sequential adsorption: candidate centers drawn uniformly at random from the valid inset region, accepted only if no overlap with prior accepted centers (`|Δrow|<W` AND `|Δcol|<W`). Interpreter field thresholded at 50% (with optional `InterpreterAgent` perturbation) before patch extraction. `window_size=1` degenerates to simple random per-pixel sampling. `max_attempts` (default `n_windows×50`) caps the search; warns and returns partial results if unreachable.
+- `window_sample_A()` — every pixel in every window → one `(map_class, ref_class)` row; same schema as `binary_stratified_sample`, feeds into `binary_confusion_from_samples` / `olofsson_area_estimates`
+- `window_sample_B()` — dominant pixel-pair combination per window → one row; ties broken by preferring `(1,1)`, `(0,0)`, `(1,0)`, `(0,1)`
+- `window_sample_C()` — independent majority label per field per window (`mean >= 0.5`) → one row; each window is one sample
+- `window_sample_D()` — `(prop_map, prop_interp)` per window for scatter plot against 1:1 line; no confusion matrix
+- `plot_window_D()` — scatter plot helper for approach D output
 
 **Multi-stack evaluation**
 - `evaluate_validation_collection()` — runs both continuous and binary evaluation across all stacks; returns `continuous_df` and `binary_df` DataFrames; accepts `save_dir` to write summary figures and CSVs to disk

@@ -192,6 +192,37 @@ Used by: `LandscapeStackCollection.buildBinaryClassifier()`
 
 ---
 
+## 6b. Window-Based Sampling Parameters
+
+Used by: `_extract_windows()` (backbone) and `window_sample_A/B/C/D()`
+
+All four public methods share this parameter set. `window_size=1` makes all four degenerate to simple random per-pixel sampling, which is the special case of the general approach.
+
+| Parameter | Range | Purpose |
+|---|---|---|
+| `sensor_name` | string | Which sensor's binary map to sample from. |
+| `window_size` | 1, 3, 5, 7, ... (odd int) | Side length W of the square sampling window. `1` = per-pixel (special case). |
+| `n_windows` | 10–1000+ | Number of non-overlapping windows to place **per stack**. |
+| `sampling_seed` | int or `None` | Seeds the random center selection. Fix for reproducibility. |
+| `interpreter_agent` | `InterpreterAgent` or `None` | If provided, perturbs raw interpreter probabilities before the 50% threshold is applied. |
+| `stack_indices` | list[int] or `None` | Restrict sampling to a subset of stacks by index. `None` = all stacks. |
+| `max_attempts` | int or `None` | Maximum candidate draws before giving up per stack. Default = `n_windows × 50`. Warns and returns partial results if exhausted. |
+
+### Window placement (shared backbone)
+
+Centers drawn uniformly at random from the valid inset region (inset by `W//2` on all sides). Each candidate accepted only if it does not overlap any prior accepted window: overlap defined as `|Δrow| < W` AND `|Δcol| < W`. This is random sequential adsorption — no fixed tiling, no grid artifacts.
+
+### Approach-specific outputs
+
+| Method | Output schema | Feeds into |
+|---|---|---|
+| `window_sample_A()` | `map_class`, `ref_class` per **pixel** | `binary_confusion_from_samples()`, `olofsson_area_estimates()` |
+| `window_sample_B()` | `map_class`, `ref_class` per **window** (dominant cell) | same |
+| `window_sample_C()` | `map_class`, `ref_class` per **window** (independent majority per field) | same |
+| `window_sample_D()` | `prop_map`, `prop_interp` per **window** | `plot_window_D()` scatter plot |
+
+---
+
 ## 7. Continuous Model Parameters
 
 Used by: `LandscapeStackCollection.buildModel()` and `buildInterpreterProbModel()`
