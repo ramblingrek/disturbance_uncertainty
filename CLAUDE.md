@@ -85,7 +85,13 @@ Takes the same `DisturbanceLandscape` as truth. Produces a probability-of-loss f
 
 Final output: `interpreter_field` (0–100% probability raster).
 
-**Type-aware:** Steps 1–4 support per-forest-type parameter overrides via a `types` block in the interpreter config (same override pattern as `SensorField`). Add `"types": {"type1": {...}, "type2": {...}}` inside `interpreter.config` to give each forest type different detection curves, noise levels, and lowpass kernel sizes. Omitting the block falls back to global defaults. For step 4, if any type defines a `lowpass_filter` key, the filter is applied per-type (each type's kernel applied to the full field, result stitched by mask); otherwise a single global pass is used.
+**Type-aware:** Steps 1–4 support per-forest-type parameter overrides via a `types` block in the interpreter config (same override pattern as `SensorField`). Add `"types": {"type1": {...}, "type2": {...}}` inside `interpreter.config` to give each forest type different detection curves, noise levels, and lowpass kernel sizes. Omitting the block falls back to global defaults. For step 4, if any type defines a `lowpass_filter` key, the filter is applied per-type (each type's kernel applied to the full field, result stitched by mask); otherwise a single global pass is used. Example:
+```json
+"types": {
+    "type1": { "lowpass_filter": { "kernel_size": 5 } },
+    "type2": { "lowpass_filter": { "kernel_size": 1 } }
+}
+```
 
 ### Layer 3 — Individual Interpreter Agent: `InterpreterAgent`
 (`src/interpreter_agent.py`)

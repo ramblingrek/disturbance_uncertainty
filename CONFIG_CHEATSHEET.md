@@ -129,6 +129,14 @@ Draws a per-patch scaler from Beta(alpha, beta) and uses it to shrink the probab
 |---|---|---|---|
 | `kernel_size` | 0–15 | Spatial smoothing of the probability field. Simulates edge effects and spatial coherence in interpreter perception. `0` = disabled. | `_apply_lowpass_step()` via `apply_lowpass_filter()` |
 
+**Per-type override:** `lowpass_filter` can be set independently per forest type inside the `types` block. If any type defines it, each type gets its own kernel (falling back to the global value for types that don't). Example:
+```json
+"types": {
+    "type1": { "lowpass_filter": { "kernel_size": 5 } },
+    "type2": { "lowpass_filter": { "kernel_size": 1 } }
+}
+```
+
 ### `spatial_uncertainty`
 
 Generates a spatially correlated field of scalers in [0, max_scaler] and uses them to shrink probabilities toward 0.5 across the landscape.
