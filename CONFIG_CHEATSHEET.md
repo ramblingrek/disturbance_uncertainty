@@ -193,17 +193,34 @@ Used by: `LandscapeStackCollection.buildModel()` and `buildInterpreterProbModel(
 | `n_strata` | 3–10 | Strata for training sample stratification (on sensor values for `buildModel`; on model probabilities for `buildInterpreterProbModel`). |
 | `samples_per_stratum` | 20–500 | Samples per stratum per stack. |
 | `sampling_seed` | int or `None` | Seeds the sample draw. |
-| `interpreter_agent` | `InterpreterAgent` or `None` | If provided, transforms base interpreter probabilities before fitting the Richards curve. |
+| `interpreter_agent` | `InterpreterAgent` or `None` | If provided, transforms base interpreter probabilities before fitting the calibration curve. |
 
-### Richards curve (fitted, not configured directly)
+### RANSAC outlier removal (`buildInterpreterProbModel` only)
 
-The model fits `p(x) = (1 + exp(−b × (x − x0)))^(−nu)`. The fitted parameters are stored in the model dict for inspection:
+Run before model fitting to exclude outliers from the inlier set used for curve fitting.
 
-| Parameter | Meaning |
+| Parameter | Range | Purpose |
+|---|---|---|
+| `ransac_n_iter` | 50–500 | Number of RANSAC iterations. Each draws a random mini-batch, fits a candidate curve, and counts inliers. | 
+| `ransac_min_sample` | 5–30 | Size of the random mini-batch drawn each iteration. |
+| `ransac_inlier_eps` | 0.05–0.3 | Inlier tolerance: a point is an inlier if `|y − ŷ| ≤ eps`. **Primary tuning knob** — raise if valid points are being removed as outliers, lower if outliers are sneaking through. |
+| `ransac_min_inlier_frac` | 0.5–0.9 | If the best inlier count is below `frac × n`, RANSAC falls back to using all data with a warning. Default 0.66. |
+
+### Model competition (`buildInterpreterProbModel` — fitted, not configured directly)
+
+Fits four candidate curves on the RANSAC inlier set, applies post-hoc endpoint rescaling to each (so all candidates pass through (0,0) and (1,1)), gates out non-monotone candidates, and selects the winner by lowest AIC (`n·log(RSS/n) + 2k`). Fitted results stored in `model_info`:
+
+| `model_info` key | Meaning |
 |---|---|
-| `x0` | Inflection point — sensor value at which probability is ~0.5 |
-| `b` | Slope / steepness |
-| `nu` | Shape / asymmetry. `nu=1` = standard logistic; `nu>1` = asymmetric |
+| `model_type` | Winning model name: `"linear"`, `"quadratic"`, `"power"`, or `"richards"` |
+| `params` | Fitted parameter list (order: linear=[a,b]; quadratic=[a,b,c]; power=[a,b]; richards=[x0,b,nu]) |
+| `scale_lo`, `scale_hi` | Endpoint rescaling values — applied in `applyInterpreterProbModel` |
+| `aic` | AIC of the winner |
+| `aic_delta` | AIC(winner) − AIC(runner-up); larger = more decisive win |
+
+### `buildModel` — Richards curve (sensor → model probability)
+
+`buildModel` still fits a single Richards curve: `p(x) = (1 + exp(−b × (x − x0)))^(−nu)`. Stored as `x0`, `b`, `nu` in the trained model dict.
 
 ---
 
