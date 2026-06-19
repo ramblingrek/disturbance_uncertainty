@@ -2652,8 +2652,391 @@ class LandscapeStackCollection:
             "n_i_samples": n_i.astype(int),
         }
 
-   
-   
+    # ------------------------------------------------------------------
+    # Window-based sampling (approaches A–D)
+    # ------------------------------------------------------------------
+
+    def _extract_windows(
+        self,
+        sensor_name: str,
+        window_size: int = 1,
+        n_windows: int = 100,
+        sampling_seed: Optional[int] = None,
+        interpreter_agent=None,
+        stack_indices: Optional[List[int]] = None,
+        max_attempts: Optional[int] = None,
+    ) -> List[Dict]:
+        """
+        Shared backbone for window-based sampling.
+
+        For each stack, randomly places `n_windows` non-overlapping W×W windows
+        using random sequential adsorption: candidate centers are drawn uniformly
+        at random from the valid inset region and accepted only if the new window
+        does not overlap any previously accepted window. Two W×W windows overlap
+        when both |Δrow| < W and |Δcol| < W.
+
+        When window_size=1 this degenerates to simple random sampling without
+        replacement (each pixel is its own non-overlapping window).
+
+        Parameters
+        ----------
+        sensor_name : str
+        window_size : int
+            Side length W of the square window (must be odd, >= 1).
+        n_windows : int
+            Number of non-overlapping windows to place per stack.
+        sampling_seed : int or None
+        interpreter_agent : InterpreterAgent or None
+            If provided, perturbs raw interpreter probabilities before the
+            50% threshold is applied.
+        stack_indices : list[int] or None
+        max_attempts : int or None
+            Maximum candidate draws before giving up on a stack.
+            Defaults to n_windows * 50.
+
+        Returns
+        -------
+        list of dicts, one per accepted window across all stacks:
+            {
+              "stack_index": int,
+              "row_center": int,
+              "col_center": int,
+              "map_patch":   np.ndarray of shape (W, W), dtype int   (0/1),
+              "interp_patch": np.ndarray of shape (W, W), dtype int  (0/1),
+            }
+        """
+        import time as _time
+
+        if sampling_seed is None:
+            sampling_seed = int(_time.time())
+        rng = np.random.default_rng(sampling_seed)
+
+        if max_attempts is None:
+            max_attempts = n_windows * 50
+
+        W = int(window_size)
+        half = W // 2
+
+        if stack_indices is None:
+            idx_used = list(range(len(self.stacks)))
+        else:
+            idx_used = list(stack_indices)
+
+        results = []
+
+        for si in idx_used:
+            stack = self.stacks[si]
+
+            if sensor_name not in stack.binary_class_by_sensor:
+                raise KeyError(
+                    f"Sensor {sensor_name!r} not in binary_class_by_sensor for stack "
+                    f"{stack.stack_id}. Call applyBinaryClassifier() first."
+                )
+
+            map_field = np.asarray(
+                stack.binary_class_by_sensor[sensor_name], dtype=int
+            )
+            H, C = map_field.shape
+
+            # Threshold interpreter field to binary (with optional agent perturbation)
+            raw_prob = np.asarray(
+                stack.interpreter_field.interpreter_field, dtype=float
+            )  # 0–100
+            if interpreter_agent is not None:
+                flat = raw_prob.ravel()
+                flat = interpreter_agent.transform_probabilities(flat)
+                raw_prob = flat.reshape(raw_prob.shape)
+            interp_binary = (raw_prob >= 50.0).astype(int)
+
+            # Valid center region: window must fit fully inside raster
+            row_lo, row_hi = half, H - half - (1 if W % 2 == 0 else 0)
+            col_lo, col_hi = half, C - half - (1 if W % 2 == 0 else 0)
+
+            if row_hi < row_lo or col_hi < col_lo:
+                import warnings
+                warnings.warn(
+                    f"Stack {stack.stack_id}: raster ({H}×{C}) too small for "
+                    f"window_size={W}. Skipping."
+                )
+                continue
+
+            n_row_valid = row_hi - row_lo + 1
+            n_col_valid = col_hi - col_lo + 1
+
+            accepted_centers: List[tuple] = []
+            attempts = 0
+
+            while len(accepted_centers) < n_windows and attempts < max_attempts:
+                attempts += 1
+                r = int(rng.integers(row_lo, row_hi + 1))
+                c = int(rng.integers(col_lo, col_hi + 1))
+
+                # Check overlap with all accepted centers
+                overlaps = any(
+                    abs(r - ar) < W and abs(c - ac) < W
+                    for ar, ac in accepted_centers
+                )
+                if not overlaps:
+                    accepted_centers.append((r, c))
+
+            if len(accepted_centers) < n_windows:
+                import warnings
+                warnings.warn(
+                    f"Stack {stack.stack_id}: only placed {len(accepted_centers)} "
+                    f"of {n_windows} requested non-overlapping windows after "
+                    f"{max_attempts} attempts (raster {H}×{C}, window_size={W})."
+                )
+
+            for r, c in accepted_centers:
+                r0, r1 = r - half, r - half + W
+                c0, c1 = c - half, c - half + W
+                results.append({
+                    "stack_index": si,
+                    "row_center": r,
+                    "col_center": c,
+                    "map_patch":    map_field[r0:r1, c0:c1].copy(),
+                    "interp_patch": interp_binary[r0:r1, c0:c1].copy(),
+                })
+
+        return results
+
+    def window_sample_A(
+        self,
+        sensor_name: str,
+        window_size: int = 1,
+        n_windows: int = 100,
+        sampling_seed: Optional[int] = None,
+        interpreter_agent=None,
+        stack_indices: Optional[List[int]] = None,
+        max_attempts: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """
+        Window sampling approach A: every pixel in every window is a sample.
+
+        Each pixel contributes one row (map_class, ref_class) to the output
+        DataFrame. The result has the same schema as binary_stratified_sample
+        and feeds directly into binary_confusion_from_samples and
+        olofsson_area_estimates.
+
+        When window_size=1 this is equivalent to simple random per-pixel sampling.
+        """
+        windows = self._extract_windows(
+            sensor_name=sensor_name,
+            window_size=window_size,
+            n_windows=n_windows,
+            sampling_seed=sampling_seed,
+            interpreter_agent=interpreter_agent,
+            stack_indices=stack_indices,
+            max_attempts=max_attempts,
+        )
+
+        rows = []
+        for w in windows:
+            mp = w["map_patch"].ravel()
+            ip = w["interp_patch"].ravel()
+            si = w["stack_index"]
+            stack = self.stacks[si]
+            for map_cls, ref_cls in zip(mp, ip):
+                rows.append({
+                    "stack_index": si,
+                    "stack_id": stack.stack_id,
+                    "sensor_name": sensor_name,
+                    "row_center": w["row_center"],
+                    "col_center": w["col_center"],
+                    "window_size": window_size,
+                    "map_class": int(map_cls),
+                    "ref_class": int(ref_cls),
+                })
+        return pd.DataFrame(rows)
+
+    def window_sample_B(
+        self,
+        sensor_name: str,
+        window_size: int = 3,
+        n_windows: int = 100,
+        sampling_seed: Optional[int] = None,
+        interpreter_agent=None,
+        stack_indices: Optional[List[int]] = None,
+        max_attempts: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """
+        Window sampling approach B: each window contributes one count to the
+        confusion matrix — the dominant (most frequent) pixel-pair combination.
+
+        Returns a DataFrame with one row per window, (map_class, ref_class)
+        indicating the dominant cell. Feeds into binary_confusion_from_samples.
+        Ties broken by preferring (1,1) then (0,0) then (1,0) then (0,1).
+        """
+        windows = self._extract_windows(
+            sensor_name=sensor_name,
+            window_size=window_size,
+            n_windows=n_windows,
+            sampling_seed=sampling_seed,
+            interpreter_agent=interpreter_agent,
+            stack_indices=stack_indices,
+            max_attempts=max_attempts,
+        )
+
+        # Tie-break order: (1,1), (0,0), (1,0), (0,1)
+        _tiebreak = {(1, 1): 0, (0, 0): 1, (1, 0): 2, (0, 1): 3}
+
+        rows = []
+        for w in windows:
+            mp = w["map_patch"].ravel()
+            ip = w["interp_patch"].ravel()
+            counts = {}
+            for pair in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+                counts[pair] = int(np.sum((mp == pair[0]) & (ip == pair[1])))
+            max_count = max(counts.values())
+            candidates = [p for p, c in counts.items() if c == max_count]
+            dominant = min(candidates, key=lambda p: _tiebreak[p])
+            si = w["stack_index"]
+            rows.append({
+                "stack_index": si,
+                "stack_id": self.stacks[si].stack_id,
+                "sensor_name": sensor_name,
+                "row_center": w["row_center"],
+                "col_center": w["col_center"],
+                "window_size": window_size,
+                "map_class": dominant[0],
+                "ref_class": dominant[1],
+            })
+        return pd.DataFrame(rows)
+
+    def window_sample_C(
+        self,
+        sensor_name: str,
+        window_size: int = 3,
+        n_windows: int = 100,
+        sampling_seed: Optional[int] = None,
+        interpreter_agent=None,
+        stack_indices: Optional[List[int]] = None,
+        max_attempts: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """
+        Window sampling approach C: majority label computed independently for
+        each field; that pair recorded as one sample per window.
+
+        majority_map   = 1 if mean(map_patch)   >= 0.5 else 0
+        majority_interp = 1 if mean(interp_patch) >= 0.5 else 0
+
+        Returns a DataFrame with one row per window, (map_class, ref_class).
+        Feeds into binary_confusion_from_samples.
+        """
+        windows = self._extract_windows(
+            sensor_name=sensor_name,
+            window_size=window_size,
+            n_windows=n_windows,
+            sampling_seed=sampling_seed,
+            interpreter_agent=interpreter_agent,
+            stack_indices=stack_indices,
+            max_attempts=max_attempts,
+        )
+
+        rows = []
+        for w in windows:
+            majority_map   = int(np.mean(w["map_patch"])   >= 0.5)
+            majority_interp = int(np.mean(w["interp_patch"]) >= 0.5)
+            si = w["stack_index"]
+            rows.append({
+                "stack_index": si,
+                "stack_id": self.stacks[si].stack_id,
+                "sensor_name": sensor_name,
+                "row_center": w["row_center"],
+                "col_center": w["col_center"],
+                "window_size": window_size,
+                "map_class": majority_map,
+                "ref_class": majority_interp,
+            })
+        return pd.DataFrame(rows)
+
+    def window_sample_D(
+        self,
+        sensor_name: str,
+        window_size: int = 3,
+        n_windows: int = 100,
+        sampling_seed: Optional[int] = None,
+        interpreter_agent=None,
+        stack_indices: Optional[List[int]] = None,
+        max_attempts: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """
+        Window sampling approach D: proportion scatter.
+
+        For each window records:
+            prop_map   = fraction of map pixels classified as 1
+            prop_interp = fraction of interpreter pixels labeled as 1
+
+        Returns a DataFrame with one row per window for scatter plotting
+        against the 1:1 line.
+        """
+        windows = self._extract_windows(
+            sensor_name=sensor_name,
+            window_size=window_size,
+            n_windows=n_windows,
+            sampling_seed=sampling_seed,
+            interpreter_agent=interpreter_agent,
+            stack_indices=stack_indices,
+            max_attempts=max_attempts,
+        )
+
+        rows = []
+        for w in windows:
+            si = w["stack_index"]
+            rows.append({
+                "stack_index": si,
+                "stack_id": self.stacks[si].stack_id,
+                "sensor_name": sensor_name,
+                "row_center": w["row_center"],
+                "col_center": w["col_center"],
+                "window_size": window_size,
+                "prop_map":    float(np.mean(w["map_patch"])),
+                "prop_interp": float(np.mean(w["interp_patch"])),
+            })
+        return pd.DataFrame(rows)
+
+    def plot_window_D(
+        self,
+        df: pd.DataFrame,
+        ax=None,
+        title: str = "",
+        save_path: Optional[str] = None,
+    ) -> None:
+        """
+        Scatter plot for approach D: prop_map (x) vs prop_interp (y) with 1:1 line.
+
+        Parameters
+        ----------
+        df : DataFrame from window_sample_D
+        ax : matplotlib Axes or None
+        title : str
+        save_path : str or None — if provided, saves figure before display
+        """
+        import matplotlib.pyplot as plt
+
+        own_fig = ax is None
+        if own_fig:
+            fig, ax = plt.subplots(figsize=(5, 5))
+
+        ax.scatter(df["prop_map"], df["prop_interp"],
+                   s=10, alpha=0.4, color="steelblue")
+        ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="1:1")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("Proportion disturbed (map)")
+        ax.set_ylabel("Proportion disturbed (interpreter)")
+        ax.set_aspect("equal")
+        ax.legend(fontsize=8)
+        if title:
+            ax.set_title(title)
+
+        if own_fig:
+            plt.tight_layout()
+            if save_path:
+                plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.show()
+
+
     def debug_plot_truth_vs_binary(
         self,
         stack_index: int,
