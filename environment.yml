@@ -1,5 +1,6 @@
 name: spatial_base
 channels:
+  - conda-forge
   - defaults
 dependencies:
   - python=3.11
