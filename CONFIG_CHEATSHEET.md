@@ -146,6 +146,18 @@ Generates a spatially correlated field of scalers in [0, max_scaler] and uses th
 | `spatial_autocorr_distance` | 2–50 (pixels) | Correlation length of the spatial uncertainty field. Larger = broader regions of high/low interpreter uncertainty. | `_apply_spatial_uncertainty()` via `spatial_uncertainty_scaler_field()` |
 | `max_scaler` | 0–0.8 | Maximum shrink-toward-0.5 scaler. `0.3` means uncertainty can pull probabilities at most 30% of the way toward 0.5. `0` = disabled. | `_apply_spatial_uncertainty()` via `spatial_uncertainty_scaler_field()` |
 
+### "Perfect interpreter" (no-op) recipe
+
+Every step except `detection_curve`/`definition_curve` has an exact, code-verified no-op value — useful when you want an `InterpreterField` that reduces as closely as possible to ground truth (e.g. as a scoring reference; see `interpreter/MAP_COMPARISON_BENCHMARK.md`):
+
+| Parameter | No-op value | Why it's exact |
+|---|---|---|
+| `gaussian_patch_noise.std_dev_percent` | `0.0` | Code skips RNG entirely when all per-type sigmas are `<= 0`. |
+| `beta_patch_uncertainty.alpha` (or `.beta`) | `0.0` | Code short-circuits to `scaler = 0.0` when `alpha <= 0` or `beta <= 0` — a real Beta(α,β>0) draw can never be exactly 0, so a degenerate parameter is the only way to force a true no-op. |
+| `lowpass_filter.kernel_size` | `1` (or `0`) | Returns an unmodified copy whenever `kernel_size <= 1`. |
+| `spatial_uncertainty.max_scaler` | `0.0` | Returns the field unchanged and skips the `gstools` call entirely. |
+| `detection_curve.slope` / `definition_curve.slope` | very large (e.g. `1e5`) | **Not exact** — a logistic only asymptotically approaches a step function. This is an approximation; validate empirically against `base_landscape.disturbed` before trusting it as a reference. |
+
 ---
 
 ## 4. Interpreter Agent (`InterpreterAgent` config)
