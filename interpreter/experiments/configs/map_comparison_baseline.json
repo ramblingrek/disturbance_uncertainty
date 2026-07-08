@@ -1,0 +1,141 @@
+{
+  "experiment_name": "map_comparison_baseline",
+  "notes": "Binary-only map comparison benchmark. 4 sensors spanning clean->high noise, scored pixel-level against a perfect-interpreter reference (thresholded at 50%). The perfect-interpreter config is an exact no-op on every noise-injecting step (gaussian_patch_noise, beta_patch_uncertainty, lowpass_filter, spatial_uncertainty all verified against source to be algebraic no-ops at these values) except detection_curve/definition_curve, which have no exact no-op — an extreme slope (1e5) only asymptotically approaches ground truth's hard threshold. Validate this empirically before trusting downstream metrics: see interpreter/notebooks/01_map_comparison_benchmark.ipynb step 0.",
+
+  "landscape_stack_config": {
+    "id_prefix": "DL",
+    "id_strategy": "hash",
+    "explicit_id": null,
+    "disturbance_config": {
+      "random": {
+        "seed": null
+      },
+      "raster": {
+        "band": 1
+      },
+      "types": {
+        "type1": {
+          "name": "Conifer",
+          "proportion_of_patches": 0.6,
+          "initial_cover": {
+            "target_mean": 0.90,
+            "kappa": 20.0
+          },
+          "proportional_loss": {
+            "mixture": {
+              "catastrophic_probability": 0.02,
+              "background_alpha": 0.3,
+              "background_beta": 8.0,
+              "catastrophic_alpha": 8.0,
+              "catastrophic_beta": 0.7
+            }
+          }
+        },
+        "type2": {
+          "name": "Broadleaf",
+          "proportion_of_patches": 0.4,
+          "initial_cover": {
+            "target_mean": 0.85,
+            "kappa": 18.0
+          },
+          "proportional_loss": {
+            "mixture": {
+              "catastrophic_probability": 0.05,
+              "background_alpha": 0.4,
+              "background_beta": 7.0,
+              "catastrophic_alpha": 7.0,
+              "catastrophic_beta": 0.8
+            }
+          }
+        }
+      },
+      "thresholds": {
+        "final_cover_percent": 15.0
+      },
+      "simulation": {
+        "max_retries": 10
+      }
+    },
+
+    "sensors": [
+      {
+        "name": "Sensor_Clean",
+        "config": {
+          "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.0 },
+          "lowpass_filter": { "kernel_size": 0 },
+          "spatial_noise": { "spatial_autocorr_distance": 10.0, "amplitude_proportion_of_range": 0.0 }
+        }
+      },
+      {
+        "name": "Sensor_Low",
+        "config": {
+          "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.01 },
+          "lowpass_filter": { "kernel_size": 3 },
+          "spatial_noise": { "spatial_autocorr_distance": 10.0, "amplitude_proportion_of_range": 0.03 }
+        }
+      },
+      {
+        "name": "Sensor_Medium",
+        "config": {
+          "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.03 },
+          "lowpass_filter": { "kernel_size": 5 },
+          "spatial_noise": { "spatial_autocorr_distance": 12.0, "amplitude_proportion_of_range": 0.08 }
+        }
+      },
+      {
+        "name": "Sensor_High",
+        "config": {
+          "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.06 },
+          "lowpass_filter": { "kernel_size": 7 },
+          "spatial_noise": { "spatial_autocorr_distance": 15.0, "amplitude_proportion_of_range": 0.15 }
+        }
+      }
+    ],
+
+    "interpreter": {
+      "name": "PerfectInterpreter",
+      "config": {
+        "detection_curve": { "pivot_loss": 0.0, "slope": 100000.0 },
+        "definition_curve": { "slope": 100000.0, "threshold_override": null },
+        "gaussian_patch_noise": { "std_dev_percent": 0.0 },
+        "beta_patch_uncertainty": { "alpha": 0.0, "beta": 5.0 },
+        "lowpass_filter": { "kernel_size": 1 },
+        "spatial_uncertainty": { "spatial_autocorr_distance": 8.0, "max_scaler": 0.0 }
+      }
+    }
+  },
+
+  "training_experiment_config": {
+    "n_stacks": 10,
+    "patch_dir": "downloaded_images/",
+    "patch_selection_seed": 42,
+    "disturbance_seed_base": 1000,
+    "use_separate_seeds_per_stack": true
+  },
+
+  "validation_experiment_config": {
+    "n_stacks": 20,
+    "patch_dir": "downloaded_images/",
+    "patch_selection_seed": 123,
+    "disturbance_seed_base": 5000,
+    "use_separate_seeds_per_stack": true
+  },
+
+  "binary_classifier_config": {
+    "sensor_names": ["Sensor_Clean", "Sensor_Low", "Sensor_Medium", "Sensor_High"],
+    "n_strata": 5,
+    "samples_per_stratum": 50,
+    "sampling_seed": null,
+    "fp_to_fn_ratio": 1.0
+  },
+
+  "window_sample_config": {
+    "window_size": 3,
+    "n_windows": 100,
+    "sampling_seed": null
+  }
+}
