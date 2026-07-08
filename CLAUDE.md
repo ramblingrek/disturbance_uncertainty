@@ -276,6 +276,25 @@ sys.path.insert(0, os.path.abspath('../../src'))
 
 Notebook `20_jsonexperiment_tester_1.ipynb` also needs its config path updated to `'../../continuous_binary/experiments/configs/baseline.json'`.
 
+### Map comparison benchmark (interpreter sub-project) — design pending
+
+A new study that uses the window-based sampling approaches (A–D) to benchmark map quality and to test whether sampling-based metrics correctly rank maps relative to pixel-level ground-truth metrics.
+
+**Workflow sketch:**
+1. Generate ~10 simulated landscapes (same `DisturbanceLandscape` machinery, two forest types). Eventually generate patch files locally at varying patch sizes rather than via GEE SNIC, but defer that infrastructure piece.
+2. From each landscape, produce multiple change maps — one per sensor — using the existing multi-sensor `SensorField` setup, each with different noise parameters.
+3. Build a **perfect-interpreter reference map**: no `InterpreterField` noise; derive directly from truth as `multiclass_truth = disturbed * (forest_type_raster + 1)` → values 0 (undisturbed), 1 (type1 disturbed), 2 (type2 disturbed).
+4. Build a **multi-class classifier** (new method): sweep type-specific thresholds independently over type1 and type2 pixels (requires `forest_type_raster`), minimizing per-type error. Produces a 3-class map per sensor.
+5. For a held-out validation set, apply classifiers to produce 3-class maps.
+6. **Pixel-level scoring** (new methods): compare each map to truth and to each other — overall agreement, full N×N confusion matrix, per-class IoU, per-class precision/recall/F1.
+7. **Window-based sampling** (existing A–D, extended to multi-class): for A/B/C, generate N×N confusion matrices and compute standard metrics; for D, record per-class proportions (3 values per field per window) and assess regression strength against truth proportions.
+8. **Meta-analysis**: for each pair of maps, compare pixel-level metric differences vs. sampling-based metric differences. Goal: identify which sampling approach (A–D) and window size best distinguishes map quality.
+
+**Open design decisions (resolve before implementing):**
+- Multi-class window D: show one proportion per class (3 values) or collapse to "disturbed vs. not"?
+- Architecture: extend `LandscapeStackCollection` with new multi-class methods (preferred) or new subclass?
+- Local SNIC patch generation: defer until map comparison logic is complete.
+
 ### Visualizer
 
 `experiment_visualizer.py` has not been built yet. Planned to load a run's output folder and display summary figures, per-stack browsing, and cross-run comparison. Discussed but not started.
