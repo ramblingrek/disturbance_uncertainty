@@ -145,58 +145,105 @@ def pixel_agreement_between_maps(map_a: np.ndarray, map_b: np.ndarray) -> Dict[s
 def map_comparison_meta_analysis(
     collection,
     sensor_names: List[str],
-    window_sample_fn,
+    window_fns: Dict[str, Any],
     window_kwargs: Optional[Dict[str, Any]] = None,
     stack_indices: Optional[List[int]] = None,
 ) -> pd.DataFrame:
     """
     For every pair of sensors, compare pixel-level metric deltas against
-    sampling-based metric deltas produced by a window_sample_A/B/C function.
+    sampling-based metric deltas for each provided window sampling function.
 
-    This is exploratory: a starting point for the meta-analysis in step 8,
-    to be iterated on once real numbers are in hand rather than a finished
-    API.
+    window_fns : dict mapping method name to callable, e.g.
+        {'A': collection.window_sample_A,
+         'B': collection.window_sample_B,
+         'C': collection.window_sample_C,
+         'D': collection.window_sample_D}
 
-    Returns a long-format DataFrame: one row per (sensor_pair, metric) with
-    pixel_delta and sampling_delta columns.
+    For A/B/C (output columns 'map_class'/'ref_class'): computes deltas for
+    agreement/precision/recall/f1/iou — the same metrics as pixel_delta.
+    For D (output columns 'prop_map'/'prop_interp'): computes Pearson r
+    between prop_map and prop_interp and reports its delta across sensor pairs;
+    pixel_delta is NaN for these rows.
+
+    Returns wide-format DataFrame: one row per (sensor_pair, metric) with
+    columns pixel_delta and sampling_delta_{method} for each method.
+    Entries that don't apply to a given metric/method combination are NaN.
     """
+    from scipy.stats import pearsonr as _pearsonr
+
     window_kwargs = dict(window_kwargs or {})
 
     pixel_df = pixel_level_metrics_for_collection(
         collection, sensor_names=sensor_names, stack_indices=stack_indices
     )
-    pixel_by_sensor = (
+    pixel_mean = (
         pixel_df.groupby("sensor_name")[["agreement", "precision", "recall", "f1", "iou"]]
         .mean()
     )
 
-    sampling_by_sensor = {}
-    for sensor_name in sensor_names:
-        samples = window_sample_fn(
-            sensor_name=sensor_name,
-            stack_indices=stack_indices,
-            **window_kwargs,
-        )
-        sampling_by_sensor[sensor_name] = pixel_level_metrics(
-            samples["map_class"].to_numpy(), samples["ref_class"].to_numpy()
-        )
+    # Compute per-method, per-sensor sampling metrics
+    abc_results: Dict[str, Dict[str, Dict[str, float]]] = {}  # method -> sensor -> metrics
+    d_results: Dict[str, Dict[str, float]] = {}               # method -> sensor -> pearson_r
+
+    for method_name, fn in window_fns.items():
+        per_sensor: Dict[str, Any] = {}
+        for sensor_name in sensor_names:
+            samples = fn(
+                sensor_name=sensor_name,
+                stack_indices=stack_indices,
+                **window_kwargs,
+            )
+            if "map_class" in samples.columns:
+                per_sensor[sensor_name] = pixel_level_metrics(
+                    samples["map_class"].to_numpy(),
+                    samples["ref_class"].to_numpy(),
+                )
+            else:
+                r, _ = _pearsonr(samples["prop_map"], samples["prop_interp"])
+                per_sensor[sensor_name] = {"pearson_r": float(r)}
+
+        if all("pearson_r" in v for v in per_sensor.values()):
+            d_results[method_name] = {s: v["pearson_r"] for s, v in per_sensor.items()}
+        else:
+            abc_results[method_name] = per_sensor
+
+    all_methods = list(window_fns.keys())
+    abc_metrics = ["agreement", "precision", "recall", "f1", "iou"]
 
     rows = []
-    metric_names = ["agreement", "precision", "recall", "f1", "iou"]
     for sensor_a, sensor_b in combinations(sensor_names, 2):
-        for metric in metric_names:
-            pixel_delta = (
-                pixel_by_sensor.loc[sensor_a, metric] - pixel_by_sensor.loc[sensor_b, metric]
-            )
-            sampling_delta = (
-                sampling_by_sensor[sensor_a][metric] - sampling_by_sensor[sensor_b][metric]
-            )
-            rows.append({
+        # Rows for A/B/C-style metrics
+        for metric in abc_metrics:
+            pixel_delta = pixel_mean.loc[sensor_a, metric] - pixel_mean.loc[sensor_b, metric]
+            row: Dict[str, Any] = {
                 "sensor_a": sensor_a,
                 "sensor_b": sensor_b,
                 "metric": metric,
                 "pixel_delta": pixel_delta,
-                "sampling_delta": sampling_delta,
-            })
+            }
+            for method_name in all_methods:
+                if method_name in abc_results:
+                    row[f"sampling_delta_{method_name}"] = (
+                        abc_results[method_name][sensor_a][metric]
+                        - abc_results[method_name][sensor_b][metric]
+                    )
+                else:
+                    row[f"sampling_delta_{method_name}"] = np.nan
+            rows.append(row)
+
+        # Rows for D-style metric (Pearson r)
+        for method_name, sensor_r in d_results.items():
+            row = {
+                "sensor_a": sensor_a,
+                "sensor_b": sensor_b,
+                "metric": "pearson_r",
+                "pixel_delta": np.nan,
+            }
+            for m in all_methods:
+                if m == method_name:
+                    row[f"sampling_delta_{m}"] = sensor_r[sensor_a] - sensor_r[sensor_b]
+                else:
+                    row[f"sampling_delta_{m}"] = np.nan
+            rows.append(row)
 
     return pd.DataFrame(rows)

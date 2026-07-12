@@ -28,7 +28,7 @@ disturbance_uncertainty/
 └── downloaded_images/          # SNIC patch rasters — gitignored, not versioned
 ```
 
-Both sub-projects share `src/`. Notebooks use `sys.path.insert(0, os.path.abspath('../../src'))`. Per-run output folders (`experiment_outputs/`) are gitignored in both sub-project directories via `**/experiment_outputs/`.
+Both sub-projects share `src/`. Notebooks in `continuous_binary/notebooks/` use `sys.path.insert(0, os.path.abspath('../../src'))` (kernel CWD = notebook directory, standard Jupyter behaviour). Notebooks in `interpreter/notebooks/` (e.g. `01_map_comparison_benchmark.ipynb`) instead resolve the repo root robustly at runtime, since the Jupyter kernel's CWD for these notebooks isn't consistent — it depends on the VS Code Jupyter extension's `jupyter.notebookFileRoot` setting, which varies by machine/workspace config and isn't tracked by the repo. The first cell walks upward from `os.getcwd()` looking for `.git` via a small `find_project_root()` helper, sets `PROJ_ROOT` to the result, and does `sys.path.insert(0, os.path.join(PROJ_ROOT, 'src'))` — this works regardless of whether the kernel starts at the repo root or at `interpreter/notebooks/`. Per-run output folders (`experiment_outputs/`) are gitignored in both sub-project directories via `**/experiment_outputs/`.
 
 ## Collaboration conventions
 
@@ -184,7 +184,7 @@ Full-raster pixel-level scoring for the interpreter sub-project's map comparison
 - `pixel_level_metrics(map_field, ref_field)` — agreement, precision, recall, F1, IoU for class 1
 - `pixel_level_metrics_for_stack()`, `pixel_level_metrics_for_collection()` — wrappers scoring `stack.binary_class_by_sensor[sensor_name]` against `perfect_reference_mask(stack)`
 - `pixel_agreement_between_maps(map_a, map_b)` — same metrics, map-vs-map (no reference/truth involved)
-- `map_comparison_meta_analysis()` — for every pair of sensors, compares pixel-level metric deltas against sampling-based metric deltas (via a passed-in `window_sample_A/B/C` function); exploratory first pass, expect the API to evolve
+- `map_comparison_meta_analysis(collection, sensor_names, window_fns, window_kwargs, stack_indices)` — for every pair of sensors, compares pixel-level metric deltas against sampling-based metric deltas. `window_fns` is a dict `{'A': fn, 'B': fn, 'C': fn, 'D': fn}`; A/B/C use agreement/precision/recall/f1/iou, D uses Pearson r between prop_map and prop_interp. Returns wide-format DataFrame with `pixel_delta` and `sampling_delta_{method}` columns; entries that don't apply to a metric/method combination are NaN
 
 A "perfect interpreter" config (see `interpreter/experiments/configs/map_comparison_baseline.json`) drives the reference: every noise-injecting `InterpreterField` step except the base-probability detection/definition curves has an exact, code-verified no-op value (`gaussian_patch_noise.std_dev_percent: 0.0`, `beta_patch_uncertainty.alpha: 0.0`, `lowpass_filter.kernel_size: 1`, `spatial_uncertainty.max_scaler: 0.0`). The detection/definition curves have no exact no-op — a logistic can only asymptotically approach a step function — so an extreme slope (`1e5`) is used instead; this is validated empirically in the notebook (step 0) by comparing the thresholded field directly against `base_landscape.disturbed`.
 
@@ -309,7 +309,7 @@ Notebooks live in `<sub-project>/notebooks/` and are numbered sequentially. For 
 
 `20_jsonexperiment_tester_1.ipynb` — tests the JSON-driven experiment runner (`src/experiment_runner.py`) end-to-end by importing `run_experiment()` directly and running it with `baseline.json`.
 
-For the `interpreter/` sub-project: `01_map_comparison_benchmark.ipynb` drives the map comparison benchmark (see Map Comparison section above) end-to-end from `map_comparison_baseline.json` — there is no runner script equivalent for this sub-project yet, the notebook is the entry point.
+For the `interpreter/` sub-project: `01_map_comparison_benchmark.ipynb` drives the map comparison benchmark (see Map Comparison section above) end-to-end from `map_comparison_baseline.json` — there is no runner script equivalent for this sub-project yet, the notebook is the entry point. Sections 3b and 3c add visual inspection panels: 3b shows a 2×2 binary map panel (Truth / Sensor_Low / Sensor_Medium / Sensor_High) for two randomly chosen validation landscapes; 3c shows a 4-panel (A–D) sampling overlay for those same landscapes (window outlines over the error map for A, coloured window blocks for B/C, proportion scatter for D).
 
 ## Experiment Logging
 

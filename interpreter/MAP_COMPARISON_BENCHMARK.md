@@ -93,25 +93,26 @@ threshold. Every other step has an exact, code-verified no-op:
    ```bash
    conda env update -f environment.yml -n spatial_base
    ```
-   This was needed once already this session — `environment.yml` had been
-   fixed to list `gstools` under the `conda-forge` channel, but the existing
-   env hadn't been recreated/updated to pick it up.
+   This was needed once already — `environment.yml` had been fixed to list
+   `gstools` under the `conda-forge` channel, but the existing env hadn't
+   been updated to pick it up.
 
 2. **Checkout the branch**:
    ```bash
    git checkout map-comparison-benchmark
    ```
 
-3. **Run the notebook** end-to-end (from `interpreter/notebooks/`):
-   ```bash
-   conda run -n spatial_base jupyter nbconvert --to notebook --execute \
-     --output 01_map_comparison_benchmark.ipynb \
-     --ExecutePreprocessor.timeout=600 \
-     01_map_comparison_benchmark.ipynb
-   ```
-   Or open it in Jupyter and run all cells. It builds 10 training + 20
-   validation stacks from `downloaded_images/` (401 rasters available at
-   time of writing — plenty of headroom), so no extra data setup is needed.
+3. **Kernel working directory**: no action needed here. The first cell
+   resolves `PROJ_ROOT` by walking upward from `os.getcwd()` until it finds
+   `.git` (`find_project_root()`), so it works whether the kernel's CWD is
+   the project root or `interpreter/notebooks/` — this varies by machine and
+   VS Code's `jupyter.notebookFileRoot` setting, which isn't tracked by the
+   repo. Verified working both ways (`nbconvert --execute` run from repo root
+   and from `interpreter/notebooks/`).
+
+4. **Run the notebook** end-to-end. It builds 10 training + 20 validation
+   stacks from `downloaded_images/` (401 rasters available at time of
+   writing — plenty of headroom), so no extra data setup is needed.
 
 ## Verified results (from the run used to build this doc)
 
@@ -147,10 +148,46 @@ recall). This is exactly the kind of finding the meta-analysis step exists to
 surface — not yet interpreted, just recorded here as the current baseline
 output.
 
+## Notebook section summary
+
+| Section | What it does |
+|---|---|
+| 1 | Build training collection (10 stacks), fit + apply binary classifiers per sensor |
+| 2 | Build validation collection (20 stacks, disjoint), load + apply classifiers |
+| 0 | Validate perfect-interpreter approximation against raw truth |
+| 3 | Pixel-level scoring: `pixel_level_metrics_for_collection` → table averaged over 20 stacks |
+| 3b | Visual inspection: 2×2 map panel per landscape (Truth / Low / Medium / High), 2 randomly chosen stacks (seed 2024) |
+| 3c | Sampling overlays: 4-panel per landscape (A=full error map + window outlines, B=dominant-pair blocks, C=majority-label blocks, D=prop scatter), same 2 stacks, `SENSOR_VIZ='Sensor_Low'` |
+| 4 | Window-based sampling A–D across all validation stacks; confusion matrices + Olofsson per sensor |
+| 5 | Meta-analysis: `map_comparison_meta_analysis` with `window_fns={'A':…,'B':…,'C':…,'D':…}` → wide-format table |
+
+`bc_cfg` and `ws_cfg` are both extracted in the config cell (cell 2) so they
+are available to all downstream cells including 3c.
+
+## `map_comparison_meta_analysis` API (current)
+
+Signature changed from single `window_sample_fn` to a dict `window_fns`:
+```python
+meta_df = map_comparison_meta_analysis(
+    val_collection,
+    sensor_names=bc_cfg['sensor_names'],
+    window_fns={
+        'A': val_collection.window_sample_A,
+        'B': val_collection.window_sample_B,
+        'C': val_collection.window_sample_C,
+        'D': val_collection.window_sample_D,
+    },
+    window_kwargs=ws_cfg,
+)
+```
+Returns wide-format DataFrame: columns `pixel_delta`, `sampling_delta_A`,
+`sampling_delta_B`, `sampling_delta_C`, `sampling_delta_D`. For A/B/C rows
+the metric is one of agreement/precision/recall/f1/iou; for D rows the metric
+is `pearson_r` (Pearson r between prop_map and prop_interp), and `pixel_delta`
+is NaN.
+
 ## Known open items
 
-- `map_comparison_meta_analysis()` is explicitly a first-pass API — expect it
-  to change once there's more data to look at.
 - No runner script for this sub-project yet (unlike `continuous_binary`'s
   `experiment_runner.py`) — the notebook is manually driven.
 - `src/map_comparison.py` and this whole branch still need review/PR before
