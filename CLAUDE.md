@@ -28,7 +28,7 @@ disturbance_uncertainty/
 └── downloaded_images/          # SNIC patch rasters — gitignored, not versioned
 ```
 
-Both sub-projects share `src/`. Notebooks use `sys.path.insert(0, os.path.abspath('../../src'))`. Per-run output folders (`experiment_outputs/`) are gitignored in both sub-project directories via `**/experiment_outputs/`.
+Both sub-projects share `src/`. Notebooks in `continuous_binary/notebooks/` use `sys.path.insert(0, os.path.abspath('../../src'))` (kernel CWD = notebook directory, standard Jupyter behaviour). Notebooks in `interpreter/notebooks/` (e.g. `01_map_comparison_benchmark.ipynb`) instead resolve the repo root robustly at runtime, since the Jupyter kernel's CWD for these notebooks isn't consistent — it depends on the VS Code Jupyter extension's `jupyter.notebookFileRoot` setting, which varies by machine/workspace config and isn't tracked by the repo. The first cell walks upward from `os.getcwd()` looking for `.git` via a small `find_project_root()` helper, sets `PROJ_ROOT` to the result, and does `sys.path.insert(0, os.path.join(PROJ_ROOT, 'src'))` — this works regardless of whether the kernel starts at the repo root or at `interpreter/notebooks/`. Per-run output folders (`experiment_outputs/`) are gitignored in both sub-project directories via `**/experiment_outputs/`.
 
 ## Collaboration conventions
 
@@ -175,6 +175,19 @@ run_id = run_experiment('../continuous_binary/experiments/configs/baseline.json'
 
 The runner: creates an output folder via `create_output_dir`, builds training and validation collections, fits continuous and binary models, evaluates, saves all figures and CSVs, and logs to the sub-project's `experiment_logs/`.
 
+### Map Comparison: `src/map_comparison.py`
+
+Full-raster pixel-level scoring for the interpreter sub-project's map comparison benchmark (binary-only first pass — see `interpreter/notebooks/01_map_comparison_benchmark.ipynb`). Unlike every other confusion/metric function in `src/`, which operates on stratified *samples*, these operate on entire rasters:
+
+- `perfect_reference_mask(stack)` — thresholds `stack.interpreter_field.interpreter_field` at 50%; used as the pixel-level "ref_class" throughout, following the same map-vs-interpreter convention used everywhere else in `src/` (never the raw truth mask directly)
+- `pixel_confusion_matrix(map_field, ref_field)` — full-raster 2×2 confusion (`n_ij`/`n_i`/`n_total`), same shape as `binary_confusion_from_samples` but computed from two arrays instead of a sampled DataFrame
+- `pixel_level_metrics(map_field, ref_field)` — agreement, precision, recall, F1, IoU for class 1
+- `pixel_level_metrics_for_stack()`, `pixel_level_metrics_for_collection()` — wrappers scoring `stack.binary_class_by_sensor[sensor_name]` against `perfect_reference_mask(stack)`
+- `pixel_agreement_between_maps(map_a, map_b)` — same metrics, map-vs-map (no reference/truth involved)
+- `map_comparison_meta_analysis(collection, sensor_names, window_fns, window_kwargs, stack_indices)` — for every pair of sensors, compares pixel-level metric deltas against sampling-based metric deltas. `window_fns` is a dict `{'A': fn, 'B': fn, 'C': fn, 'D': fn}`; A/B/C use agreement/precision/recall/f1/iou, D uses Pearson r between prop_map and prop_interp. Returns wide-format DataFrame with `pixel_delta` and `sampling_delta_{method}` columns; entries that don't apply to a metric/method combination are NaN
+
+A "perfect interpreter" config (see `interpreter/experiments/configs/map_comparison_baseline.json`) drives the reference: every noise-injecting `InterpreterField` step except the base-probability detection/definition curves has an exact, code-verified no-op value (`gaussian_patch_noise.std_dev_percent: 0.0`, `beta_patch_uncertainty.alpha: 0.0`, `lowpass_filter.kernel_size: 1`, `spatial_uncertainty.max_scaler: 0.0`). The detection/definition curves have no exact no-op — a logistic can only asymptotically approach a step function — so an extreme slope (`1e5`) is used instead; this is validated empirically in the notebook (step 0) by comparing the thresholded field directly against `base_landscape.disturbed`.
+
 ## Config Structure
 
 Experiment configs are stored as JSON in `<sub-project>/experiments/configs/`. The canonical template is `continuous_binary/experiments/configs/baseline.json`. Top-level keys and what consumes them:
@@ -276,24 +289,13 @@ sys.path.insert(0, os.path.abspath('../../src'))
 
 Notebook `20_jsonexperiment_tester_1.ipynb` also needs its config path updated to `'../../continuous_binary/experiments/configs/baseline.json'`.
 
-### Map comparison benchmark (interpreter sub-project) — design pending
+### Map comparison benchmark (interpreter sub-project) — binary-only first pass built
 
-A new study that uses the window-based sampling approaches (A–D) to benchmark map quality and to test whether sampling-based metrics correctly rank maps relative to pixel-level ground-truth metrics.
+Uses window-based sampling (existing A–D, unmodified) alongside new full-raster pixel-level scoring (`src/map_comparison.py`) to test whether sampling-based metrics correctly rank maps relative to pixel-level ground-truth metrics. Scope was deliberately narrowed to **binary disturbed/not-disturbed only** for this first build — forest types are retained in the landscape but no 3-class classification/scoring exists yet.
 
-**Workflow sketch:**
-1. Generate ~10 simulated landscapes (same `DisturbanceLandscape` machinery, two forest types). Eventually generate patch files locally at varying patch sizes rather than via GEE SNIC, but defer that infrastructure piece.
-2. From each landscape, produce multiple change maps — one per sensor — using the existing multi-sensor `SensorField` setup, each with different noise parameters.
-3. Build a **perfect-interpreter reference map**: no `InterpreterField` noise; derive directly from truth as `multiclass_truth = disturbed * (forest_type_raster + 1)` → values 0 (undisturbed), 1 (type1 disturbed), 2 (type2 disturbed).
-4. Build a **multi-class classifier** (new method): sweep type-specific thresholds independently over type1 and type2 pixels (requires `forest_type_raster`), minimizing per-type error. Produces a 3-class map per sensor.
-5. For a held-out validation set, apply classifiers to produce 3-class maps.
-6. **Pixel-level scoring** (new methods): compare each map to truth and to each other — overall agreement, full N×N confusion matrix, per-class IoU, per-class precision/recall/F1.
-7. **Window-based sampling** (existing A–D, extended to multi-class): for A/B/C, generate N×N confusion matrices and compute standard metrics; for D, record per-class proportions (3 values per field per window) and assess regression strength against truth proportions.
-8. **Meta-analysis**: for each pair of maps, compare pixel-level metric differences vs. sampling-based metric differences. Goal: identify which sampling approach (A–D) and window size best distinguishes map quality.
+Built: `interpreter/experiments/configs/map_comparison_baseline.json` (4 sensors spanning clean→high noise, perfect-interpreter reference config), `src/map_comparison.py` (pixel-level scoring + meta-analysis), `interpreter/notebooks/01_map_comparison_benchmark.ipynb` (drives the full pipeline: 10 training stacks, 20 disjoint validation stacks, binary classifiers per sensor, pixel-level scoring, window sampling A–D, meta-analysis).
 
-**Open design decisions (resolve before implementing):**
-- Multi-class window D: show one proportion per class (3 values) or collapse to "disturbed vs. not"?
-- Architecture: extend `LandscapeStackCollection` with new multi-class methods (preferred) or new subclass?
-- Local SNIC patch generation: defer until map comparison logic is complete.
+Multi-class extension, local SNIC patch generation, and spatial-pattern characterization of validation landscapes are deferred — see `interpreter/IDEAS.md`.
 
 ### Visualizer
 
@@ -306,6 +308,8 @@ A new study that uses the window-based sampling approaches (A–D) to benchmark 
 Notebooks live in `<sub-project>/notebooks/` and are numbered sequentially. For the `continuous_binary/` sub-project: the master notebook (`00_`) documents the overall experiment design; individual numbered notebooks correspond to development stages: landscape building (01–04), model fitting (05–07), diagnostics (08–09), and full runs/evaluation (10–14).
 
 `20_jsonexperiment_tester_1.ipynb` — tests the JSON-driven experiment runner (`src/experiment_runner.py`) end-to-end by importing `run_experiment()` directly and running it with `baseline.json`.
+
+For the `interpreter/` sub-project: `01_map_comparison_benchmark.ipynb` drives the map comparison benchmark (see Map Comparison section above) end-to-end from `map_comparison_baseline.json` — there is no runner script equivalent for this sub-project yet, the notebook is the entry point. Sections 3b and 3c add visual inspection panels: 3b shows a 2×2 binary map panel (Truth / Sensor_Low / Sensor_Medium / Sensor_High) for two randomly chosen validation landscapes; 3c shows a 4-panel (A–D) sampling overlay for those same landscapes (window outlines over the error map for A, coloured window blocks for B/C, proportion scatter for D).
 
 ## Experiment Logging
 
