@@ -31,8 +31,10 @@ variant. That was deliberately deferred for this first build — see
 5. Validation set: 20 scenes, disjoint from the 10 training scenes.
 6. Pixel-level scoring: new, since nothing in `src/` did full-raster (as
    opposed to sampled) confusion/precision/recall/IoU before this.
-7. Window sampling: reuses `window_sample_A/B/C/D` unmodified — no multi-class
-   extension.
+7. Window sampling: reuses `window_sample_A/B/C/D` — no multi-class
+   extension. Window *placement* was later changed to a reference-stratified
+   design (see "Reference-stratified window sampling" below); the per-window
+   scoring logic in A/B/C/D themselves is unmodified.
 8. Meta-analysis: pixel-level metric deltas vs. sampling-based metric deltas
    between sensor pairs — first-pass/exploratory.
 
@@ -85,6 +87,47 @@ threshold. Every other step has an exact, code-verified no-op:
   notebook's step 0 cell by comparing the thresholded perfect-interpreter
   field directly against `base_landscape.disturbed` — see results below.
 
+## Reference-stratified window sampling
+
+`window_sample_config.n_windows_per_stratum` (e.g. `{"0": 50, "1": 50}`)
+replaced the old flat `n_windows: 100`. Window centers for A/B/C/D are now
+drawn via a stratified random design where the stratum label is the *true*
+interpreter field at the window center (thresholded at 50%), not the map —
+implemented in `_extract_windows()` (`src/landscape_stack_collection.py`).
+This fixes a real problem with the old unstratified design: disturbed
+pixels are rare, so a plain random sample of window centers gave very few
+disturbed-labeled windows (e.g. ~35 out of ~2000 for approach B) — too few
+to say much about precision/recall on the rare class. The stratified design
+pulls that up to a genuinely balanced sample (e.g. ~770–780 out of ~1935 for
+the same run).
+
+Candidate centers per stratum are precomputed, shuffled, and placed
+interleaved round-robin so one stratum doesn't spatially exhaust the raster
+before the other's quota is filled; all accepted windows still share one
+non-overlap check regardless of stratum. `_extract_windows()` warns
+per-stratum when a quota can't be met — this happens legitimately when a
+validation stack has few or zero truly-disturbed pixels (e.g. one stack in
+the current validation set got 0/50 for stratum 1).
+
+**`olofsson_area_estimates()` is intentionally NOT called on these samples.**
+Working through the math: Olofsson's estimator combines a *fully known* side
+(the map — 100% sensor coverage in reality) with a *sample-estimated* side
+(reference labels, since real fieldwork can only visit a sample of
+locations). Under reference-stratification, the marginal area estimate that
+formula targets (`P_hat_j`) becomes an exact algebraic identity to the known
+population size of the reference stratum — not an estimate at all, since the
+formula's Horvitz–Thompson-expanded joint counts sum to exactly that known
+quantity regardless of what the sample contains. So it isn't just biased
+under this design, it's degenerate — it always exactly reproduces a number
+we already knew before sampling. (The current, deliberate decision is to
+leave `olofsson_area_estimates()` untouched, since it's actively used by the
+`continuous_binary` sub-project, and to just not call it for this sampling
+design.) Step 4 in the notebook instead computes the raw/unweighted
+confusion matrix (`binary_confusion_from_samples`) and `pixel_level_metrics`
+(agreement/precision/recall/f1/iou) directly on the stratified sample, which
+stays directly comparable to the pixel-level numbers in the meta-analysis
+(step 8).
+
 ## How to recreate / re-run from scratch
 
 1. **Environment**: `spatial_base` conda env must actually have `gstools`
@@ -135,11 +178,14 @@ Monotonic degradation from clean → high noise on agreement/f1/iou, matching
 the deliberate noise gradient built into the 4 sensor configs. Good sign the
 scoring machinery is behaving sensibly.
 
-**Step 7 — window sampling (A/B/C, `window_size=3`, `n_windows=100`):**
-confusion matrices per sensor showed the same pattern — off-diagonal counts
-grow with sensor noise. B/C (window-level aggregation) collapse each 3×3
-window to one sample, so their totals are much smaller than A (pixel-level)
-but show cleaner separation.
+**Step 7 — window sampling (A/B/C, `window_size=3`,
+`n_windows_per_stratum={0: 50, 1: 50}`):** confusion matrices per sensor
+showed the same pattern — off-diagonal counts grow with sensor noise. B/C
+(window-level aggregation) collapse each 3×3 window to one sample, so their
+totals are much smaller than A (pixel-level) but show cleaner separation.
+E.g. Sensor_Clean confusion for B: `[[1164, 7], [1, 766]]` — note the
+disturbed-reference column (7+766=773) is now a substantial fraction of the
+~1938 sample, versus ~35/2000 under the old unstratified design.
 
 **Step 8 — meta-analysis:** pixel-level and sampling-based metric deltas
 mostly agree in sign and rough magnitude across sensor pairs, with a few
@@ -158,7 +204,7 @@ output.
 | 3 | Pixel-level scoring: `pixel_level_metrics_for_collection` → table averaged over 20 stacks |
 | 3b | Visual inspection: 2×2 map panel per landscape (Truth / Low / Medium / High), 2 randomly chosen stacks (seed 2024) |
 | 3c | Sampling overlays: 4-panel per landscape (A=full error map + window outlines, B=dominant-pair blocks, C=majority-label blocks, D=prop scatter), same 2 stacks, `SENSOR_VIZ='Sensor_Low'` |
-| 4 | Window-based sampling A–D across all validation stacks; confusion matrices + Olofsson per sensor |
+| 4 | Reference-stratified window sampling A–D across all validation stacks; confusion matrices + raw `pixel_level_metrics` per sensor (no Olofsson — see "Reference-stratified window sampling" above) |
 | 5 | Meta-analysis: `map_comparison_meta_analysis` with `window_fns={'A':…,'B':…,'C':…,'D':…}` → wide-format table |
 
 `bc_cfg` and `ws_cfg` are both extracted in the config cell (cell 2) so they

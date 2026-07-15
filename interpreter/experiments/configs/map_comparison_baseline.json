@@ -135,7 +135,7 @@
 
   "window_sample_config": {
     "window_size": 3,
-    "n_windows": 100,
+    "n_windows_per_stratum": { "0": 50, "1": 50 },
     "sampling_seed": null
   }
 }
