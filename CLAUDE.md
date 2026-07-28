@@ -297,6 +297,8 @@ Uses window-based sampling (existing A–D, unmodified) alongside new full-raste
 
 Built: `interpreter/experiments/configs/map_comparison_baseline.json` (4 sensors spanning clean→high noise, perfect-interpreter reference config), `src/map_comparison.py` (pixel-level scoring + meta-analysis), `interpreter/notebooks/01_map_comparison_benchmark.ipynb` (drives the full pipeline: 10 training stacks, 20 disjoint validation stacks, binary classifiers per sensor, pixel-level scoring, window sampling A–D, meta-analysis).
 
+Also built: `map_comparison_point_vs_all.json` (Sensor_Clean/X/Y/Z with varying `curve_k` and noise), `interpreter/notebooks/02_point_sampling_f1_comparison.ipynb` (single-draw Olofsson area estimate + corrected F1 vs pixel F1 for one run), `interpreter/experiments/configs/point_sampling_sensitivity.json` + `interpreter/notebooks/03_point_sampling_sensitivity.ipynb` (multi-run sensitivity experiment: sweeps sample size and catastrophic disturbance probability across 9 conditions × 5 runs, logs one row per run×sensor to `interpreter/experiment_logs/master_experiment_logger.csv`).
+
 Multi-class extension, local SNIC patch generation, and spatial-pattern characterization of validation landscapes are deferred — see `interpreter/IDEAS.md`.
 
 ### Visualizer
@@ -312,6 +314,10 @@ Notebooks live in `<sub-project>/notebooks/` and are numbered sequentially. For 
 `20_jsonexperiment_tester_1.ipynb` — tests the JSON-driven experiment runner (`src/experiment_runner.py`) end-to-end by importing `run_experiment()` directly and running it with `baseline.json`.
 
 For the `interpreter/` sub-project: `01_map_comparison_benchmark.ipynb` drives the map comparison benchmark (see Map Comparison section above) end-to-end from `map_comparison_baseline.json` — there is no runner script equivalent for this sub-project yet, the notebook is the entry point. Sections 3b and 3c add visual inspection panels: 3b shows a 2×2 binary map panel (Truth / Sensor_Low / Sensor_Medium / Sensor_High) for two randomly chosen validation landscapes; 3c shows a 4-panel (A–D) sampling overlay for those same landscapes (window outlines over the error map for A, coloured window blocks for B/C, proportion scatter for D).
+
+`02_point_sampling_f1_comparison.ipynb` — tests whether a single Olofsson-style point sample (drawn from all validation stacks pooled as a "larger landscape") can distinguish maps of varying quality. Two-panel output: (left) Olofsson area estimate ± 95% CI per sensor vs. true disturbed proportion; (right) corrected sample F1 (Olofsson-weighted confusion proportions) vs. pixel-level F1. Uses `map_comparison_point_vs_all.json` (Sensor_Clean/X/Y/Z, varying `curve_k` 1–5, gaussian noise 0–0.25, spatial autocorr 0–0.5). Corrected F1 formula: `F1 = 2·W[1]·p_ij[1,1] / (2·W[1]·p_ij[1,1] + W[1]·p_ij[1,0] + W[0]·p_ij[0,1])`.
+
+`03_point_sampling_sensitivity.ipynb` — multi-run sensitivity experiment: loops over conditions defined in `point_sampling_sensitivity.json`, each overriding `n_train_stacks`, `n_val_stacks`, `n_samples_per_class`, and `catastrophic_probability` per forest type. For each run, logs one row per sensor to `interpreter/experiment_logs/master_experiment_logger.csv` (columns: `run_id`, `condition_id`, `run_number`, `sensor_name`, sample-size params, disturbance params, Olofsson outputs `p_hat/se/ci_lo/ci_hi/true_disturbed_prop`, `f1_pixel`, `f1_sample`, pixel confusion metrics). Analysis cells show: CI width vs sample size, area estimate bias, pixel F1 vs sample F1 scatter (1:1 diagnostic), disturbance rate effects. Run IDs from `generate_run_id()` (timestamp + hash, same pattern as `continuous_binary`).
 
 ## Experiment Logging
 
