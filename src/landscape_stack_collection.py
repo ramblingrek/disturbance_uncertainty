@@ -2665,14 +2665,15 @@ class LandscapeStackCollection:
         interpreter_agent=None,
         stack_indices: Optional[List[int]] = None,
         max_attempts: Optional[int] = None,
+        n_windows_per_stratum: Optional[Dict[int, int]] = None,
     ) -> List[Dict]:
         """
         Shared backbone for window-based sampling.
 
-        For each stack, randomly places `n_windows` non-overlapping W×W windows
-        using random sequential adsorption: candidate centers are drawn uniformly
-        at random from the valid inset region and accepted only if the new window
-        does not overlap any previously accepted window. Two W×W windows overlap
+        For each stack, randomly places non-overlapping W×W windows using
+        random sequential adsorption: candidate centers are drawn at random
+        from the valid inset region and accepted only if the new window does
+        not overlap any previously accepted window. Two W×W windows overlap
         when both |Δrow| < W and |Δcol| < W.
 
         When window_size=1 this degenerates to simple random sampling without
@@ -2684,15 +2685,28 @@ class LandscapeStackCollection:
         window_size : int
             Side length W of the square window (must be odd, >= 1).
         n_windows : int
-            Number of non-overlapping windows to place per stack.
+            Number of non-overlapping windows to place per stack. Ignored if
+            `n_windows_per_stratum` is provided.
         sampling_seed : int or None
         interpreter_agent : InterpreterAgent or None
             If provided, perturbs raw interpreter probabilities before the
             50% threshold is applied.
         stack_indices : list[int] or None
         max_attempts : int or None
-            Maximum candidate draws before giving up on a stack.
-            Defaults to n_windows * 50.
+            Maximum candidate draws before giving up on a stack (unstratified
+            mode only). Defaults to n_windows * 50.
+        n_windows_per_stratum : dict or None
+            If provided, switches to a stratified random design: candidate
+            centers are restricted per stratum to pixels whose *true*
+            interpreter label (interp_binary, thresholded at 50% — same
+            reference convention used everywhere else, never the raw truth
+            mask) matches that stratum. Keys are 0/1, values are the number
+            of non-overlapping windows to place with that center label, e.g.
+            {0: 50, 1: 50}. Placement is interleaved round-robin across
+            strata so one stratum doesn't spatially exhaust the raster
+            before the other's quota is filled; all accepted windows
+            (regardless of stratum) still share one non-overlap check.
+            `n_windows` and `max_attempts` are ignored in this mode.
 
         Returns
         -------
@@ -2701,6 +2715,8 @@ class LandscapeStackCollection:
               "stack_index": int,
               "row_center": int,
               "col_center": int,
+              "stratum": int or None,   # interp label the center was drawn for
+                                         # (None in unstratified mode)
               "map_patch":   np.ndarray of shape (W, W), dtype int   (0/1),
               "interp_patch": np.ndarray of shape (W, W), dtype int  (0/1),
             }
@@ -2710,6 +2726,9 @@ class LandscapeStackCollection:
         if sampling_seed is None:
             sampling_seed = int(_time.time())
         rng = np.random.default_rng(sampling_seed)
+
+        if n_windows_per_stratum is not None:
+            n_windows_per_stratum = {int(k): int(v) for k, v in n_windows_per_stratum.items()}
 
         if max_attempts is None:
             max_attempts = n_windows * 50
@@ -2764,28 +2783,78 @@ class LandscapeStackCollection:
             n_col_valid = col_hi - col_lo + 1
 
             accepted_centers: List[tuple] = []
-            attempts = 0
+            stratum_by_center: Dict[tuple, Optional[int]] = {}
 
-            while len(accepted_centers) < n_windows and attempts < max_attempts:
-                attempts += 1
-                r = int(rng.integers(row_lo, row_hi + 1))
-                c = int(rng.integers(col_lo, col_hi + 1))
+            if n_windows_per_stratum is not None:
+                # Candidate pool per stratum: pixels in the valid inset region
+                # whose *true* interp label matches that stratum, shuffled.
+                inset = interp_binary[row_lo:row_hi + 1, col_lo:col_hi + 1]
+                candidates_by_stratum: Dict[int, List[tuple]] = {}
+                for stratum_val, quota in n_windows_per_stratum.items():
+                    rr, cc = np.where(inset == stratum_val)
+                    coords = np.stack([rr + row_lo, cc + col_lo], axis=1)
+                    coords = coords[rng.permutation(len(coords))]
+                    candidates_by_stratum[stratum_val] = [tuple(x) for x in coords.tolist()]
 
-                # Check overlap with all accepted centers
-                overlaps = any(
-                    abs(r - ar) < W and abs(c - ac) < W
-                    for ar, ac in accepted_centers
-                )
-                if not overlaps:
-                    accepted_centers.append((r, c))
+                pointers = {k: 0 for k in n_windows_per_stratum}
+                placed = {k: 0 for k in n_windows_per_stratum}
+                strata_order = list(n_windows_per_stratum.keys())
 
-            if len(accepted_centers) < n_windows:
-                import warnings
-                warnings.warn(
-                    f"Stack {stack.stack_id}: only placed {len(accepted_centers)} "
-                    f"of {n_windows} requested non-overlapping windows after "
-                    f"{max_attempts} attempts (raster {H}×{C}, window_size={W})."
-                )
+                progress = True
+                while progress:
+                    progress = False
+                    for stratum_val in strata_order:
+                        quota = n_windows_per_stratum[stratum_val]
+                        if placed[stratum_val] >= quota:
+                            continue
+                        pool = candidates_by_stratum[stratum_val]
+                        ptr = pointers[stratum_val]
+                        while ptr < len(pool):
+                            r, c = pool[ptr]
+                            ptr += 1
+                            overlaps = any(
+                                abs(r - ar) < W and abs(c - ac) < W
+                                for ar, ac in accepted_centers
+                            )
+                            if not overlaps:
+                                accepted_centers.append((r, c))
+                                stratum_by_center[(r, c)] = stratum_val
+                                placed[stratum_val] += 1
+                                progress = True
+                                break
+                        pointers[stratum_val] = ptr
+
+                for stratum_val, quota in n_windows_per_stratum.items():
+                    if placed[stratum_val] < quota:
+                        import warnings
+                        warnings.warn(
+                            f"Stack {stack.stack_id}: only placed {placed[stratum_val]} "
+                            f"of {quota} requested non-overlapping windows for stratum "
+                            f"{stratum_val} (raster {H}×{C}, window_size={W})."
+                        )
+            else:
+                attempts = 0
+
+                while len(accepted_centers) < n_windows and attempts < max_attempts:
+                    attempts += 1
+                    r = int(rng.integers(row_lo, row_hi + 1))
+                    c = int(rng.integers(col_lo, col_hi + 1))
+
+                    # Check overlap with all accepted centers
+                    overlaps = any(
+                        abs(r - ar) < W and abs(c - ac) < W
+                        for ar, ac in accepted_centers
+                    )
+                    if not overlaps:
+                        accepted_centers.append((r, c))
+
+                if len(accepted_centers) < n_windows:
+                    import warnings
+                    warnings.warn(
+                        f"Stack {stack.stack_id}: only placed {len(accepted_centers)} "
+                        f"of {n_windows} requested non-overlapping windows after "
+                        f"{max_attempts} attempts (raster {H}×{C}, window_size={W})."
+                    )
 
             for r, c in accepted_centers:
                 r0, r1 = r - half, r - half + W
@@ -2794,6 +2863,7 @@ class LandscapeStackCollection:
                     "stack_index": si,
                     "row_center": r,
                     "col_center": c,
+                    "stratum": stratum_by_center.get((r, c)),
                     "map_patch":    map_field[r0:r1, c0:c1].copy(),
                     "interp_patch": interp_binary[r0:r1, c0:c1].copy(),
                 })
@@ -2809,6 +2879,7 @@ class LandscapeStackCollection:
         interpreter_agent=None,
         stack_indices: Optional[List[int]] = None,
         max_attempts: Optional[int] = None,
+        n_windows_per_stratum: Optional[Dict[int, int]] = None,
     ) -> pd.DataFrame:
         """
         Window sampling approach A: every pixel in every window is a sample.
@@ -2819,6 +2890,10 @@ class LandscapeStackCollection:
         olofsson_area_estimates.
 
         When window_size=1 this is equivalent to simple random per-pixel sampling.
+
+        n_windows_per_stratum : see _extract_windows. If provided, window
+        centers are stratified by true interpreter label instead of placed
+        unstratified, and `n_windows` is ignored.
         """
         windows = self._extract_windows(
             sensor_name=sensor_name,
@@ -2828,6 +2903,7 @@ class LandscapeStackCollection:
             interpreter_agent=interpreter_agent,
             stack_indices=stack_indices,
             max_attempts=max_attempts,
+            n_windows_per_stratum=n_windows_per_stratum,
         )
 
         rows = []
@@ -2844,6 +2920,7 @@ class LandscapeStackCollection:
                     "row_center": w["row_center"],
                     "col_center": w["col_center"],
                     "window_size": window_size,
+                    "stratum": w["stratum"],
                     "map_class": int(map_cls),
                     "ref_class": int(ref_cls),
                 })
@@ -2858,6 +2935,7 @@ class LandscapeStackCollection:
         interpreter_agent=None,
         stack_indices: Optional[List[int]] = None,
         max_attempts: Optional[int] = None,
+        n_windows_per_stratum: Optional[Dict[int, int]] = None,
     ) -> pd.DataFrame:
         """
         Window sampling approach B: each window contributes one count to the
@@ -2866,6 +2944,10 @@ class LandscapeStackCollection:
         Returns a DataFrame with one row per window, (map_class, ref_class)
         indicating the dominant cell. Feeds into binary_confusion_from_samples.
         Ties broken by preferring (1,1) then (0,0) then (1,0) then (0,1).
+
+        n_windows_per_stratum : see _extract_windows. If provided, window
+        centers are stratified by true interpreter label instead of placed
+        unstratified, and `n_windows` is ignored.
         """
         windows = self._extract_windows(
             sensor_name=sensor_name,
@@ -2875,6 +2957,7 @@ class LandscapeStackCollection:
             interpreter_agent=interpreter_agent,
             stack_indices=stack_indices,
             max_attempts=max_attempts,
+            n_windows_per_stratum=n_windows_per_stratum,
         )
 
         # Tie-break order: (1,1), (0,0), (1,0), (0,1)
@@ -2898,6 +2981,7 @@ class LandscapeStackCollection:
                 "row_center": w["row_center"],
                 "col_center": w["col_center"],
                 "window_size": window_size,
+                "stratum": w["stratum"],
                 "map_class": dominant[0],
                 "ref_class": dominant[1],
             })
@@ -2912,6 +2996,7 @@ class LandscapeStackCollection:
         interpreter_agent=None,
         stack_indices: Optional[List[int]] = None,
         max_attempts: Optional[int] = None,
+        n_windows_per_stratum: Optional[Dict[int, int]] = None,
     ) -> pd.DataFrame:
         """
         Window sampling approach C: majority label computed independently for
@@ -2922,6 +3007,10 @@ class LandscapeStackCollection:
 
         Returns a DataFrame with one row per window, (map_class, ref_class).
         Feeds into binary_confusion_from_samples.
+
+        n_windows_per_stratum : see _extract_windows. If provided, window
+        centers are stratified by true interpreter label instead of placed
+        unstratified, and `n_windows` is ignored.
         """
         windows = self._extract_windows(
             sensor_name=sensor_name,
@@ -2931,6 +3020,7 @@ class LandscapeStackCollection:
             interpreter_agent=interpreter_agent,
             stack_indices=stack_indices,
             max_attempts=max_attempts,
+            n_windows_per_stratum=n_windows_per_stratum,
         )
 
         rows = []
@@ -2945,6 +3035,7 @@ class LandscapeStackCollection:
                 "row_center": w["row_center"],
                 "col_center": w["col_center"],
                 "window_size": window_size,
+                "stratum": w["stratum"],
                 "map_class": majority_map,
                 "ref_class": majority_interp,
             })
@@ -2959,6 +3050,7 @@ class LandscapeStackCollection:
         interpreter_agent=None,
         stack_indices: Optional[List[int]] = None,
         max_attempts: Optional[int] = None,
+        n_windows_per_stratum: Optional[Dict[int, int]] = None,
     ) -> pd.DataFrame:
         """
         Window sampling approach D: proportion scatter.
@@ -2969,6 +3061,10 @@ class LandscapeStackCollection:
 
         Returns a DataFrame with one row per window for scatter plotting
         against the 1:1 line.
+
+        n_windows_per_stratum : see _extract_windows. If provided, window
+        centers are stratified by true interpreter label instead of placed
+        unstratified, and `n_windows` is ignored.
         """
         windows = self._extract_windows(
             sensor_name=sensor_name,
@@ -2978,6 +3074,7 @@ class LandscapeStackCollection:
             interpreter_agent=interpreter_agent,
             stack_indices=stack_indices,
             max_attempts=max_attempts,
+            n_windows_per_stratum=n_windows_per_stratum,
         )
 
         rows = []
@@ -2990,6 +3087,7 @@ class LandscapeStackCollection:
                 "row_center": w["row_center"],
                 "col_center": w["col_center"],
                 "window_size": window_size,
+                "stratum": w["stratum"],
                 "prop_map":    float(np.mean(w["map_patch"])),
                 "prop_interp": float(np.mean(w["interp_patch"])),
             })

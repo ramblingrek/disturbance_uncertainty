@@ -1,0 +1,73 @@
+{
+  "experiment_name": "point_sampling_sensitivity",
+  "notes": "Sensitivity analysis: does point-based Olofsson sampling detect map quality differences, and how does that depend on sample size and disturbance rate? Each condition overrides n_train/val stacks, samples per class, and catastrophic loss probabilities for both forest types. All other sensor/interpreter parameters come from the base config. Seeds vary by condition+run so each replicate draws different landscapes.",
+  "base_config": "interpreter/experiments/configs/map_comparison_point_vs_all.json",
+  "n_runs_per_condition": 10,
+  "log_dir": "interpreter/experiment_logs/",
+
+  "conditions": [
+    {
+      "condition_id": "n50_distLow",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 50, "1": 50},
+      "catastrophic_probability": {"type1": 0.01, "type2": 0.01}
+    },
+    {
+      "condition_id": "n50_distMed",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 50, "1": 50},
+      "catastrophic_probability": {"type1": 0.02, "type2": 0.02}
+    },
+    {
+      "condition_id": "n50_distHigh",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 50, "1": 50},
+      "catastrophic_probability": {"type1": 0.03, "type2": 0.03}
+    },
+     {
+      "condition_id": "n100_distLow",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 100, "1": 100},
+      "catastrophic_probability": {"type1": 0.01, "type2": 0.01}
+    },
+    {
+      "condition_id": "n100_distMed",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 100, "1": 100},
+      "catastrophic_probability": {"type1": 0.02, "type2": 0.02}
+    },
+    {
+      "condition_id": "n100_distHigh",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 100, "1": 100},
+      "catastrophic_probability": {"type1": 0.03, "type2": 0.03}
+    },
+       {
+      "condition_id": "n200_distLow",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 200, "1": 200},
+      "catastrophic_probability": {"type1": 0.01, "type2": 0.01}
+    },
+    {
+      "condition_id": "n200_distMed",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 200, "1": 200},
+      "catastrophic_probability": {"type1": 0.02, "type2": 0.02}
+    },
+    {
+      "condition_id": "n200_distHigh",
+      "n_train_stacks": 20,
+      "n_val_stacks": 40,
+      "n_samples_per_class": {"0": 200, "1": 200},
+      "catastrophic_probability": {"type1": 0.03, "type2": 0.03}
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
-  "experiment_name": "map_comparison_baseline",
-  "notes": "Binary-only map comparison benchmark. 4 sensors spanning clean->high noise, scored pixel-level against a perfect-interpreter reference (thresholded at 50%). The perfect-interpreter config is an exact no-op on every noise-injecting step (gaussian_patch_noise, beta_patch_uncertainty, lowpass_filter, spatial_uncertainty all verified against source to be algebraic no-ops at these values) except detection_curve/definition_curve, which have no exact no-op — an extreme slope (1e5) only asymptotically approaches ground truth's hard threshold. Validate this empirically before trusting downstream metrics: see interpreter/notebooks/01_map_comparison_benchmark.ipynb step 0.",
+  "experiment_name": "map_comparison_point_vs_all",
+  "notes": "Point-based Olofsson sampling vs. pixel-level F1 comparison. Sensors X/Y/Z span a range of gaussian noise (0.08–0.25), curve_k (1–5), and spatial autocorrelation (broader and stronger than baseline). Sensor_Clean retained as a zero-noise reference. See 02_point_sampling_f1_comparison.ipynb.",
 
   "landscape_stack_config": {
     "id_prefix": "DL",
@@ -68,30 +68,30 @@
         }
       },
       {
-        "name": "Sensor_Low",
+        "name": "Sensor_X",
         "config": {
-          "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
-          "gaussian_patch_noise": { "std_proportion_of_range": 0.01 },
+          "signal_transform": { "max_signal": 1000.0, "curve_k": 1.0 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.08 },
           "lowpass_filter": { "kernel_size": 3 },
-          "spatial_noise": { "spatial_autocorr_distance": 10.0, "amplitude_proportion_of_range": 0.03 }
+          "spatial_noise": { "spatial_autocorr_distance": 20.0, "amplitude_proportion_of_range": 0.20 }
         }
       },
       {
-        "name": "Sensor_Medium",
+        "name": "Sensor_Y",
         "config": {
           "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
-          "gaussian_patch_noise": { "std_proportion_of_range": 0.03 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.15 },
           "lowpass_filter": { "kernel_size": 5 },
-          "spatial_noise": { "spatial_autocorr_distance": 12.0, "amplitude_proportion_of_range": 0.08 }
+          "spatial_noise": { "spatial_autocorr_distance": 30.0, "amplitude_proportion_of_range": 0.35 }
         }
       },
       {
-        "name": "Sensor_High",
+        "name": "Sensor_Z",
         "config": {
-          "signal_transform": { "max_signal": 1000.0, "curve_k": 3.0 },
-          "gaussian_patch_noise": { "std_proportion_of_range": 0.06 },
+          "signal_transform": { "max_signal": 1000.0, "curve_k": 5.0 },
+          "gaussian_patch_noise": { "std_proportion_of_range": 0.25 },
           "lowpass_filter": { "kernel_size": 7 },
-          "spatial_noise": { "spatial_autocorr_distance": 15.0, "amplitude_proportion_of_range": 0.15 }
+          "spatial_noise": { "spatial_autocorr_distance": 40.0, "amplitude_proportion_of_range": 0.50 }
         }
       }
     ],
@@ -126,11 +126,16 @@
   },
 
   "binary_classifier_config": {
-    "sensor_names": ["Sensor_Clean", "Sensor_Low", "Sensor_Medium", "Sensor_High"],
+    "sensor_names": ["Sensor_Clean", "Sensor_X", "Sensor_Y", "Sensor_Z"],
     "n_strata": 5,
     "samples_per_stratum": 50,
     "sampling_seed": null,
     "fp_to_fn_ratio": 1.0
+  },
+
+  "point_sample_config": {
+    "n_samples_per_class": { "0": 50, "1": 50 },
+    "sampling_seed": null
   },
 
   "window_sample_config": {
